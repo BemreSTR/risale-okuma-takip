@@ -190,14 +190,7 @@ export default function App() {
       // Supabase'de increment fonksiyonu SQL ile yapılabilir ama burada önce okuyup sonra yazacağız ya da RPC kullanacağız.
       // Basitlik için: RPC kullanmıyoruz, log ekleyeceğiz.
       // UI zaten loglardan hesaplıyor, bu yüzden 'current_pages' fieldini güncellemek zorunda değiliz ama cache için iyi olur.
-
-      const { data: bookData } = await supabase.from('books').select('current_pages').eq('id', selectedBook.id).single();
-      const newPages = (bookData?.current_pages || 0) + amount;
-
-      await supabase.from('books').update({ current_pages: newPages }).eq('id', selectedBook.id);
-
-      // 2. Log Ekle/Güncelle
-      // Aynı gün ve kitap için kayıt var mı?
+      // 2. Kayıt Var mı Kontrol Et
       const { data: existingLogs } = await supabase
         .from('reading_logs')
         .select('*')
@@ -205,24 +198,32 @@ export default function App() {
         .eq('book_id', selectedBook.id)
         .eq('date', dateInput);
 
+      let diff = amount;
+
       if (existingLogs && existingLogs.length > 0) {
-        // Update
-        const log = existingLogs[0];
+        // Güncelle (Üzerine Yaz)
+        const oldLog = existingLogs[0];
+        diff = amount - oldLog.amount; // Kitap toplam ilerlemesi için farkı hesapla
+
         await supabase
           .from('reading_logs')
-          .update({ amount: log.amount + amount })
-          .eq('id', log.id);
+          .update({ amount: amount }) // Üzerine Yaz (10 + 30 = 40 değil, direkt 30)
+          .eq('id', oldLog.id);
       } else {
-        // Insert
+        // Yeni Ekle
         await supabase.from('reading_logs').insert({
           user_id: uid,
           book_id: selectedBook.id,
           title: selectedBook.title,
           amount: amount,
-          date: dateInput,
-          // timestamp -> created_at (auto)
+          date: dateInput
         });
       }
+
+      // 3. Kitap Toplam İlerlemesini Güncelle
+      const { data: bookData } = await supabase.from('books').select('current_pages').eq('id', selectedBook.id).single();
+      const newTotal = (bookData?.current_pages || 0) + diff;
+      await supabase.from('books').update({ current_pages: newTotal }).eq('id', selectedBook.id);
 
       setReadModalOpen(false);
     } catch (error) {
@@ -1182,7 +1183,7 @@ function FriendsView({ userId }) {
               <button onClick={() => setActiveGroupId(null)}><X size={20} color="#64748b" /></button>
             </div>
             <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '12px' }}>Eklemek istediğin kişinin Kullanıcı ID'sini gir.</p>
-            <input value={memberIdInput} onChange={e => setMemberIdInput(e.target.value)} placeholder="Talebe ID (örn: TR99X123)" autoFocus />
+            <input value={memberIdInput} onChange={e => setMemberIdInput(e.target.value)} placeholder="Talebe ID (örn: TR9923X1232)" autoFocus />
             <button className="btn-primary" onClick={handleAddMember}>Ekle</button>
           </div>
         </div>
