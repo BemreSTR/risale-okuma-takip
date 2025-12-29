@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
-import { Mail, Lock, User as UserIcon, ArrowRight, Loader2, Info, Eye, EyeOff } from 'lucide-react';
+import { Mail, Lock, User as UserIcon, ArrowRight, Loader2, Info, Eye, EyeOff, Bell, BellOff } from 'lucide-react';
 
 // Risale-i Nur Külliyatı (14 Temel Kitap)
 const RISALE_BOOKS = [
@@ -50,25 +50,15 @@ export default function App() {
   const [selectedBook, setSelectedBook] = useState(null);
   const [pagesInput, setPagesInput] = useState('');
   const [dateInput, setDateInput] = useState('');
+  const [notifPermission, setNotifPermission] = useState(typeof Notification !== 'undefined' ? Notification.permission : 'default');
 
-  // 1. Auth Listener
   // 1. Auth Listener
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
       if (user) {
-        // Kullanıcı giriş yaptı, Supabase profilini çek (Public ID için)
-        // Eğer yoksa (yeni kayıt), AuthView'da oluşturulacak ama burada da kontrol edebiliriz.
-        // Firebase UID -> Supabase ID eşleşmesi için 'users' tablosunu kullanacağız.
-        const { data, error } = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', user.uid)
-          .single();
-
-        if (data) {
-          setUserProfile(data);
-        }
+        const { data } = await supabase.from('users').select('*').eq('id', user.uid).maybeSingle();
+        if (data) setUserProfile(data);
       } else {
         setUserProfile(null);
       }
@@ -76,6 +66,35 @@ export default function App() {
     });
     return () => unsub();
   }, []);
+
+  // 1.5 Bildirim Hatırlatıcı (21:00)
+  useEffect(() => {
+    if (notifPermission === 'granted') {
+      const interval = setInterval(() => {
+        const now = new Date();
+        if (now.getHours() === 21 && now.getMinutes() === 0) {
+          const today = new Date().toISOString().split('T')[0];
+          // Bugün için log var mı kontrol et
+          const hasReadToday = logs && logs[today] && logs[today].length > 0;
+
+          if (!hasReadToday) {
+            new Notification("Risale-i Nur Takip", {
+              body: "Bugün biraz rızıklanmak ister misin? ✨ Okumayı unutma.",
+              icon: "/icon-192.png"
+            });
+          }
+        }
+      }, 60000); // Her dakika kontrol et
+      return () => clearInterval(interval);
+    }
+  }, [notifPermission, logs]);
+
+  const requestNotifPermission = async () => {
+    if (typeof Notification !== 'undefined') {
+      const permission = await Notification.requestPermission();
+      setNotifPermission(permission);
+    }
+  };
 
   // 2. Data Listeners (Supabase Realtime)
   useEffect(() => {
@@ -318,20 +337,24 @@ export default function App() {
         )}
         {activeTab === 'calendar' && <CalendarView logs={logs} />}
         {activeTab === 'friends' && <FriendsView userId={currentUser.uid} />}
-        {activeTab === 'profile' && showHatimler ? (
-          <HatimlerView finishedStats={finishedStats} onBack={() => setShowHatimler(false)} onEdit={async (book) => {
-            setSelectedHatimBook(book);
-            setHatimCountInput(String(finishedStats[book] || 0));
-            setEditHatimModal(true);
-          }} />
-        ) : activeTab === 'profile' && (
-          <ProfileView
-            finishedStats={finishedStats}
-            onShowHatimler={() => setShowHatimler(true)}
-            publicId={userProfile?.public_id || '...'}
-            name={userProfile?.name || 'Misafir'}
-            onLogout={handleLogout}
-          />
+        {activeTab === 'profile' && (
+          showHatimler ? (
+            <HatimlerView finishedStats={finishedStats} onBack={() => setShowHatimler(false)} onEdit={async (book) => {
+              setSelectedHatimBook(book);
+              setHatimCountInput(String(finishedStats[book] || 0));
+              setEditHatimModal(true);
+            }} />
+          ) : (
+            <ProfileView
+              finishedStats={finishedStats}
+              onShowHatimler={() => setShowHatimler(true)}
+              publicId={userProfile?.public_id || '...'}
+              name={userProfile?.name || 'Misafir'}
+              onLogout={handleLogout}
+              requestNotifPermission={requestNotifPermission}
+              notifPermission={notifPermission}
+            />
+          )
         )}
       </div>
 
@@ -1279,7 +1302,7 @@ function FriendDetailView({ friend, onBack }) {
   );
 }
 
-function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout }) {
+function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, requestNotifPermission, notifPermission }) {
   const hatimCount = Math.min(...RISALE_BOOKS.map(title => finishedStats[title] || 0));
   return (
     <div>
@@ -1308,6 +1331,26 @@ function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout }
           <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '2px' }}>KULLANICI ID (kopyala)</div>
           <div style={{ fontSize: '20px', fontWeight: '800', letterSpacing: '1px', color: 'var(--text-primary)' }}>{publicId}</div>
         </div>
+      </div>
+
+      {/* Bildirim Hatırlatıcısı Kartı */}
+      <div className="card" style={{ justifyContent: 'space-between', alignItems: 'center', background: notifPermission === 'granted' ? '#f0fdf4' : '#fff' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ background: notifPermission === 'granted' ? '#22c55e' : '#f1f5f9', color: notifPermission === 'granted' ? 'white' : '#64748b', padding: '10px', borderRadius: '12px' }}>
+            {notifPermission === 'granted' ? <Bell size={20} /> : <BellOff size={20} />}
+          </div>
+          <div>
+            <div style={{ fontSize: '14px', fontWeight: 'bold' }}>Akşam Hatırlatması</div>
+            <div style={{ fontSize: '12px', color: '#64748b' }}>Saat 21:00'de okuma uyarısı</div>
+          </div>
+        </div>
+        {notifPermission !== 'granted' ? (
+          <button onClick={requestNotifPermission} className="btn-primary" style={{ padding: '8px 16px', fontSize: '12px', width: 'auto' }}>
+            Aç
+          </button>
+        ) : (
+          <span style={{ fontSize: '12px', color: '#22c55e', fontWeight: 'bold' }}>AÇIK</span>
+        )}
       </div>
 
       <div className="card" onClick={onShowHatimler} style={{ cursor: 'pointer', justifyContent: 'space-between' }}>
