@@ -1,8 +1,18 @@
 import { useState, useEffect } from 'react';
 import { Home, Calendar, Users, User, Plus, X, ChevronRight, BookOpen, CheckCircle, Trash2 } from 'lucide-react';
 import './index.css';
-import { db } from './firebase';
-import { collection, addDoc, updateDoc, doc, onSnapshot, query, where, deleteDoc, getDocs, setDoc, increment, orderBy } from 'firebase/firestore';
+import { auth } from './firebase';
+import { supabase } from './supabase';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Separator } from "@/components/ui/separator";
+import { Mail, Lock, User as UserIcon, ArrowRight, Loader2, Info } from 'lucide-react';
 
 // Risale-i Nur Külliyatı (14 Temel Kitap)
 const RISALE_BOOKS = [
@@ -18,15 +28,18 @@ const COLORS = [
 
 export default function App() {
   // Auth State
-  const [userId, setUserId] = useState(localStorage.getItem('okuma_app_userid'));
+  const [currentUser, setCurrentUser] = useState(null);
+  const [userProfile, setUserProfile] = useState(null); // { publicId, name, ... }
+  const [loadingAuth, setLoadingAuth] = useState(true);
 
+  // App State
   const [activeTab, setActiveTab] = useState('home');
   const [showHatimler, setShowHatimler] = useState(false);
   const [editHatimModal, setEditHatimModal] = useState(false);
   const [selectedHatimBook, setSelectedHatimBook] = useState(null);
   const [hatimCountInput, setHatimCountInput] = useState('');
 
-  // State
+  // Data
   const [myBooks, setMyBooks] = useState([]);
   const [finishedStats, setFinishedStats] = useState({});
   const [logs, setLogs] = useState({});
@@ -38,75 +51,120 @@ export default function App() {
   const [pagesInput, setPagesInput] = useState('');
   const [dateInput, setDateInput] = useState('');
 
-  // Firebase Listeners
+  // 1. Auth Listener
+  // 1. Auth Listener
   useEffect(() => {
-    if (!userId) return;
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      setCurrentUser(user);
+      if (user) {
+        // Kullanıcı giriş yaptı, Supabase profilini çek (Public ID için)
+        // Eğer yoksa (yeni kayıt), AuthView'da oluşturulacak ama burada da kontrol edebiliriz.
+        // Firebase UID -> Supabase ID eşleşmesi için 'users' tablosunu kullanacağız.
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', user.uid)
+          .single();
 
-    // 1. Kitapları Dinle
-    const qBooks = query(collection(db, "users", userId, "books"));
-    const unsubBooks = onSnapshot(qBooks, (snapshot) => {
-      const booksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setMyBooks(booksData);
-    });
-
-    // 2. İstatistikleri Dinle (Bitirilen Kitaplar)
-    const docRefStats = doc(db, "users", userId, "stats", "general");
-    const unsubStats = onSnapshot(docRefStats, (doc) => {
-      if (doc.exists()) {
-        setFinishedStats(doc.data());
+        if (data) {
+          setUserProfile(data);
+        }
       } else {
-        setFinishedStats({});
+        setUserProfile(null);
       }
+      setLoadingAuth(false);
     });
+    return () => unsub();
+  }, []);
 
-    // 3. Okuma Kayıtlarını Dinle (Son 3 ay çekilebilir, şimdilik hepsi)
-    const qLogs = query(collection(db, "users", userId, "reading_logs"), orderBy("date", "desc"));
-    const unsubLogs = onSnapshot(qLogs, (snapshot) => {
-      const logsData = {};
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        if (!logsData[data.date]) logsData[data.date] = [];
-        logsData[data.date].push(data);
-      });
-      setLogs(logsData);
-    });
+  // 2. Data Listeners (Supabase Realtime)
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const userId = currentUser.uid;
+
+    const fetchData = async () => {
+      // Kitaplar
+      const { data: booksData } = await supabase.from('books').select('*').eq('user_id', userId);
+      if (booksData) setMyBooks(booksData);
+
+      // İstatistikler (book_counts tablosunda tutuyoruz)
+      const { data: statsData } = await supabase.from('book_stats').select('*').eq('user_id', userId);
+      const statsObj = {};
+      if (statsData) {
+        statsData.forEach(s => {
+          statsObj[s.book_title] = s.count;
+        });
+      }
+      setFinishedStats(statsObj);
+
+      // Loglar
+      const { data: logsData } = await supabase.from('reading_logs').select('*').eq('user_id', userId).order('date', { ascending: false });
+      if (logsData) {
+        const logsMap = {};
+        logsData.forEach(log => {
+          if (!logsMap[log.date]) logsMap[log.date] = [];
+          logsMap[log.date].push(log);
+        });
+        setLogs(logsMap);
+      }
+    };
+
+    fetchData();
+
+    // Realtime Subscriptions
+    const channels = supabase.channel('custom-all-channel')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'books', filter: `user_id=eq.${userId}` },
+        (payload) => {
+          if (payload.eventType === 'INSERT') setMyBooks(prev => [...prev, payload.new]);
+          else if (payload.eventType === 'DELETE') setMyBooks(prev => prev.filter(b => b.id !== payload.old.id));
+          else if (payload.eventType === 'UPDATE') setMyBooks(prev => prev.map(b => b.id === payload.new.id ? payload.new : b));
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'book_stats', filter: `user_id=eq.${userId}` },
+        (payload) => {
+          // Basitçe yeniden çekmek daha güvenli olabilir ama manuel update edelim
+          if (payload.new) {
+            setFinishedStats(prev => ({ ...prev, [payload.new.book_title]: payload.new.count }));
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'reading_logs', filter: `user_id=eq.${userId}` },
+        (payload) => {
+          // Loglar karmaşık, yeniden çekelim veya state'i güncelleyelim.
+          // Basitlik için yeniden çekiyoruz (fetchData fonksiyonunu useEffect dışına almak gerekirdi ama burada duplicate edelim ya da basit reload)
+          // State update:
+          fetchData();
+        }
+      )
+      .subscribe();
 
     return () => {
-      unsubBooks();
-      unsubStats();
-      unsubLogs();
+      supabase.removeChannel(channels);
     };
-  }, [userId]);
+  }, [currentUser]);
 
   // Helpers
   const getTodayStr = () => new Date().toISOString().split('T')[0];
+  const getUserId = () => currentUser?.uid;
 
-  // Kitabın güncel sayfa sayısını loglardan hesapla
-  // Eğer kitabın lastReset tarihi varsa, o tarihten sonraki logları topla
   const getBookProgress = (book) => {
     let total = 0;
     Object.values(logs).flat().forEach(log => {
-      if (log.bookId === book.id) {
-        // Log zamanı ve Reset zamanı kontrolü
-        // Firestore timestamp objesi {seconds: ..., nanoseconds: ...} olarak gelir
-        // Localde oluşturulanlar Date objesi olabilir. Hepsini milisaniyeye çevirip kıyaslayalım.
+      if (log.book_id === book.id) { // bookId -> book_id (snake_case)
+        let logTime = new Date(log.created_at).getTime(); // timestamp -> created_at
+        if (log.date) logTime = new Date(log.date).getTime();
 
-        let logTime = 0;
-        if (log.timestamp?.toDate) logTime = log.timestamp.toDate().getTime();
-        else if (log.timestamp?.seconds) logTime = log.timestamp.seconds * 1000; // Timestamp objesi
-        else if (log.timestamp instanceof Date) logTime = log.timestamp.getTime();
-        else if (log.timestamp) logTime = new Date(log.timestamp).getTime(); // String vs
-
-        if (book.lastReset) {
-          let resetTime = 0;
-          if (book.lastReset?.toDate) resetTime = book.lastReset.toDate().getTime();
-          else if (book.lastReset?.seconds) resetTime = book.lastReset.seconds * 1000;
-          else if (book.lastReset instanceof Date) resetTime = book.lastReset.getTime();
-          else if (book.lastReset) resetTime = new Date(book.lastReset).getTime();
-
-          if (logTime <= resetTime) return; // Sıfırlamadan önceki logları dahil etme
+        if (book.last_reset) { // lastReset -> last_reset
+          const resetTime = new Date(book.last_reset).getTime();
+          if (logTime <= resetTime) return;
         }
-
         total += log.amount;
       }
     });
@@ -124,71 +182,79 @@ export default function App() {
     if (!pagesInput || isNaN(pagesInput)) return;
     const amount = parseInt(pagesInput);
     if (amount <= 0) return;
+    const uid = getUserId();
+    if (!uid) return;
 
     try {
-      // 1. Kitabın sayfa sayısını cache olarak güncelle (Opsiyonel ama iyi olur)
-      // Artık UI buradan okumuyor ama veritabanında dursun.
-      const bookRef = doc(db, "users", userId, "books", selectedBook.id);
-      await updateDoc(bookRef, {
-        currentPages: increment(amount)
-      });
+      // 1. Kitap Sayfasını Güncelle
+      // Supabase'de increment fonksiyonu SQL ile yapılabilir ama burada önce okuyup sonra yazacağız ya da RPC kullanacağız.
+      // Basitlik için: RPC kullanmıyoruz, log ekleyeceğiz.
+      // UI zaten loglardan hesaplıyor, bu yüzden 'current_pages' fieldini güncellemek zorunda değiliz ama cache için iyi olur.
 
-      // 2. Log Ekle veya Güncelle
-      const logsRef = collection(db, "users", userId, "reading_logs");
-      const q = query(
-        logsRef,
-        where("date", "==", dateInput),
-        where("bookId", "==", selectedBook.id)
-      );
+      const { data: bookData } = await supabase.from('books').select('current_pages').eq('id', selectedBook.id).single();
+      const newPages = (bookData?.current_pages || 0) + amount;
 
-      const querySnapshot = await getDocs(q);
+      await supabase.from('books').update({ current_pages: newPages }).eq('id', selectedBook.id);
 
-      if (!querySnapshot.empty) {
-        const logDoc = querySnapshot.docs[0];
-        const logRef = doc(db, "users", userId, "reading_logs", logDoc.id);
-        await updateDoc(logRef, {
-          amount: increment(amount),
-          timestamp: new Date()
-        });
+      // 2. Log Ekle/Güncelle
+      // Aynı gün ve kitap için kayıt var mı?
+      const { data: existingLogs } = await supabase
+        .from('reading_logs')
+        .select('*')
+        .eq('user_id', uid)
+        .eq('book_id', selectedBook.id)
+        .eq('date', dateInput);
+
+      if (existingLogs && existingLogs.length > 0) {
+        // Update
+        const log = existingLogs[0];
+        await supabase
+          .from('reading_logs')
+          .update({ amount: log.amount + amount })
+          .eq('id', log.id);
       } else {
-        await addDoc(logsRef, {
-          bookId: selectedBook.id,
+        // Insert
+        await supabase.from('reading_logs').insert({
+          user_id: uid,
+          book_id: selectedBook.id,
           title: selectedBook.title,
           amount: amount,
           date: dateInput,
-          timestamp: new Date()
+          // timestamp -> created_at (auto)
         });
       }
 
       setReadModalOpen(false);
     } catch (error) {
-      console.error("Okuma kaydedilirken hata:", error);
-      alert("Hata oluştu, tekrar deneyin.");
+      console.error("Okuma hatası:", error);
+      alert("Hata oluştu.");
     }
   };
 
   const handleFinishBook = async (e, book) => {
     e.stopPropagation();
-    if (!window.confirm(`${book.title} kitabını bitirdiğini onaylıyor musun? Sayaç sıfırlanacak ve hatim sayına eklenecek.`)) return;
+    if (!window.confirm(`${book.title} kitabını bitirdiğini onaylıyor musun? Sayaç sıfırlanacak.`)) return;
+    const uid = getUserId();
 
     try {
-      // 1. İstatistik güncelle (Hatim sayısını artır)
-      const statsRef = doc(db, "users", userId, "stats", "general");
-      // Belge yoksa setDoc merge ile oluşturur, varsa update eder gibi çalışır ama increment için setDoc merge gerekli olabilir yada önce get.
-      // Firestore increment undefined fieldda çalışır ve field oluşturur.
-      await setDoc(statsRef, {
-        [book.title]: increment(1)
-      }, { merge: true });
+      // 1. İstatistik Upsert
+      const { data: existingStat } = await supabase.from('book_stats').select('*').eq('user_id', uid).eq('book_title', book.title).single();
+      const currentCount = existingStat ? existingStat.count : 0;
 
-      // 2. Kitabı sıfırla (lastReset ekleyerek)
-      const bookRef = doc(db, "users", userId, "books", book.id);
-      await updateDoc(bookRef, {
-        currentPages: 0,
-        lastReset: new Date()
-      });
+      if (existingStat) {
+        await supabase.from('book_stats').update({ count: currentCount + 1 }).eq('id', existingStat.id);
+      } else {
+        await supabase.from('book_stats').insert({ user_id: uid, book_title: book.title, count: 1 });
+      }
+
+      // 2. Kitabı Sıfırla
+      await supabase.from('books').update({
+        current_pages: 0,
+        last_reset: new Date().toISOString()
+      }).eq('id', book.id);
 
     } catch (error) {
-      console.error("Kitap bitirme hatası:", error);
+      console.error("Bitirme hatası:", error);
     }
   };
 
@@ -198,45 +264,40 @@ export default function App() {
       alert("Bu kitap zaten listenizde.");
       return;
     }
-
+    const uid = getUserId();
     try {
-      await addDoc(collection(db, "users", userId, "books"), {
+      await supabase.from('books').insert({
+        user_id: uid,
         title: title,
-        currentPages: 0,
-        addedAt: new Date()
+        current_pages: 0,
+        added_at: new Date().toISOString()
       });
       setAddBookModalOpen(false);
     } catch (error) {
-      console.error("Kitap ekleme hatası:", error);
+      console.error("Ekleme hatası:", error);
     }
   };
 
   const handleRemoveBook = async (e, id) => {
     e.stopPropagation();
     if (window.confirm("Bu kitabı listenden kaldırmak istediğine emin misin?")) {
-      try {
-        await deleteDoc(doc(db, "users", userId, "books", id));
-      } catch (error) {
-        console.error("Silme hatası:", error);
-      }
+      await supabase.from('books').delete().eq('id', id);
     }
-  }
+  };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     if (window.confirm("Çıkış yapmak istediğine emin misin?")) {
-      localStorage.removeItem('okuma_app_userid');
-      setUserId(null);
+      await signOut(auth);
       setMyBooks([]);
       setLogs({});
       setFinishedStats({});
     }
   };
 
-  if (!userId) {
-    return <AuthView onLogin={(id) => {
-      setUserId(id);
-      localStorage.setItem('okuma_app_userid', id);
-    }} />;
+  if (loadingAuth) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Yükleniyor...</div>;
+
+  if (!currentUser) {
+    return <AuthView />;
   }
 
   return (
@@ -253,11 +314,20 @@ export default function App() {
           />
         )}
         {activeTab === 'calendar' && <CalendarView logs={logs} />}
-        {activeTab === 'friends' && <FriendsView />}
+        {activeTab === 'friends' && <FriendsView userId={currentUser.uid} />}
         {activeTab === 'profile' && showHatimler ? (
-          <HatimlerView finishedStats={finishedStats} onBack={() => setShowHatimler(false)} onEdit={(book) => { setSelectedHatimBook(book); setHatimCountInput(String(finishedStats[book] || 0)); setEditHatimModal(true); }} />
+          <HatimlerView finishedStats={finishedStats} onBack={() => setShowHatimler(false)} onEdit={async (book) => {
+            setSelectedHatimBook(book);
+            setHatimCountInput(String(finishedStats[book] || 0));
+            setEditHatimModal(true);
+          }} />
         ) : activeTab === 'profile' && (
-          <ProfileView finishedStats={finishedStats} onShowHatimler={() => setShowHatimler(true)} onLogout={handleLogout} />
+          <ProfileView
+            finishedStats={finishedStats}
+            onShowHatimler={() => setShowHatimler(true)}
+            publicId={userProfile?.public_id || '...'}
+            onLogout={handleLogout}
+          />
         )}
       </div>
 
@@ -349,10 +419,14 @@ export default function App() {
               const count = parseInt(hatimCountInput);
               if (isNaN(count) || count < 0) return;
               try {
-                const statsRef = doc(db, "users", userId, "stats", "general");
-                await setDoc(statsRef, {
-                  [selectedHatimBook]: count
-                }, { merge: true });
+                const uid = getUserId();
+                // Find existing stat
+                const { data: existing } = await supabase.from('book_stats').select('*').eq('user_id', uid).eq('book_title', selectedHatimBook).single();
+                if (existing) {
+                  await supabase.from('book_stats').update({ count }).eq('id', existing.id);
+                } else {
+                  await supabase.from('book_stats').insert({ user_id: uid, book_title: selectedHatimBook, count });
+                }
                 setEditHatimModal(false);
               } catch (error) {
                 console.error("Hatim güncelleme hatası:", error);
@@ -366,82 +440,221 @@ export default function App() {
   );
 }
 
-function AuthView({ onLogin }) {
-  const [isRegister, setIsRegister] = useState(false);
-  const [name, setName] = useState('');
-  const [inputId, setInputId] = useState('');
+function AuthView() {
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const generateId = () => {
-    // TR + 2 random number + X + 3 random number -> TR99X123 (8 char)
-    const r1 = Math.floor(Math.random() * 90 + 10); // 10-99
-    const r2 = Math.floor(Math.random() * 900 + 100); // 100-999
+  // Register Form
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  // Login Form
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+
+  const generatePublicId = () => {
+    const r1 = Math.floor(Math.random() * 90 + 10);
+    const r2 = Math.floor(Math.random() * 900 + 100);
     return `TR${r1}X${r2}`;
   };
 
   const handleRegister = async () => {
-    if (!name.trim()) return alert("Lütfen adınızı giriniz.");
-    const newId = generateId();
+    if (!name || !email || !password) return setErrorMsg("Lütfen tüm alanları doldurunuz.");
+    if (password.length < 6) return setErrorMsg("Şifre en az 6 karakter olmalı.");
 
+    setErrorMsg('');
+    setLoading(true);
     try {
-      await setDoc(doc(db, "users", newId), {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+      await updateProfile(user, { displayName: name });
+
+      const publicId = generatePublicId();
+      await supabase.from('users').insert({
+        id: user.uid,
         name: name,
-        createdAt: new Date()
+        email: email,
+        public_id: publicId,
       });
-      alert(`Kaydınız oluşturuldu! Kullanıcı ID'niz: ${newId}. Lütfen bunu not edin.`);
-      onLogin(newId);
     } catch (e) {
       console.error(e);
-      alert("Kayıt sırasında hata oluştu.");
+      let msg = "Kayıt hatası.";
+      if (e.code === 'auth/email-already-in-use') msg = "Bu e-posta zaten kullanımda.";
+      setErrorMsg(msg);
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleLogin = async () => {
-    if (!inputId.trim()) return;
-    const cleanId = inputId.trim().toUpperCase();
-
-    // Basitçe giriş yap, ID doğrulaması yapılabilir ama şimdilik direkt giriş
-    onLogin(cleanId);
+    if (!loginEmail || !loginPassword) return setErrorMsg("Lütfen bilgileri giriniz.");
+    setErrorMsg('');
+    setLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+    } catch (e) {
+      console.error(e);
+      let msg = "Giriş yapılamadı.";
+      if (e.code === 'auth/invalid-credential') msg = "Hatalı e-posta veya şifre.";
+      setErrorMsg(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', background: 'linear-gradient(to bottom, #f0fdfa, #ffffff)' }}>
-      <div style={{
-        width: '80px', height: '80px', background: 'var(--primary-color)', borderRadius: '20px',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', marginBottom: '24px', boxShadow: '0 10px 25px -5px rgba(13, 148, 136, 0.4)'
-      }}>
-        <BookOpen size={40} />
-      </div>
-      <h1 style={{ fontSize: '24px', fontWeight: '800', color: '#1e293b', marginBottom: '8px' }}>Risale-i Nur Takip</h1>
-      <p style={{ color: '#64748b', textAlign: 'center', marginBottom: '32px' }}>Günlük okumalarını takip et, hatimlerini kaydet.</p>
-
-      <div className="card" style={{ width: '100%', maxWidth: '350px', padding: '24px' }}>
-        <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', marginBottom: '20px' }}>
-          <button
-            style={{ flex: 1, padding: '10px', background: 'none', borderBottom: isRegister ? 'none' : '2px solid var(--primary-color)', color: isRegister ? '#94a3b8' : 'var(--primary-color)', fontWeight: '600' }}
-            onClick={() => setIsRegister(false)}
-          >Giriş Yap</button>
-          <button
-            style={{ flex: 1, padding: '10px', background: 'none', borderBottom: isRegister ? '2px solid var(--primary-color)' : 'none', color: isRegister ? 'var(--primary-color)' : '#94a3b8', fontWeight: '600' }}
-            onClick={() => setIsRegister(true)}
-          >Yeni Talebe</button>
+    <div className="min-h-screen w-full bg-slate-50 flex flex-col items-center justify-center p-4">
+      {/* Logo & Header */}
+      <div className="mb-8 text-center space-y-2 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="w-16 h-16 bg-primary rounded-2xl flex items-center justify-center text-white mx-auto shadow-lg shadow-primary/20">
+          <BookOpen size={32} />
         </div>
-
-        {isRegister ? (
-          <>
-            <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '4px' }}>Adınız Soyadınız</label>
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="Örn: Ahmet Yılmaz" />
-            <button className="btn-primary" onClick={handleRegister}>Kayıt Ol</button>
-          </>
-        ) : (
-          <>
-            <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '4px' }}>Kullanıcı ID</label>
-            <input value={inputId} onChange={e => setInputId(e.target.value)} placeholder="Örn: TR99X123" />
-            <button className="btn-primary" onClick={handleLogin}>Giriş Yap</button>
-          </>
-        )}
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">Risale-i Nur Takip</h1>
+          <p className="text-slate-500 text-sm">Ruhuna gıda, aklına nûr olanı takip et.</p>
+        </div>
       </div>
 
-      <div style={{ marginTop: '24px', fontSize: '12px', color: '#94a3b8' }}>v1.0.0 • Mobile First Design</div>
+      <Card className="w-full max-w-md shadow-xl border-none animate-in fade-in zoom-in-95 duration-500 delay-200">
+        <Tabs defaultValue="login" className="w-full">
+          <CardHeader className="pb-2">
+            <TabsList className="grid w-full grid-cols-2 h-12">
+              <TabsTrigger value="login" className="text-sm font-semibold">Giriş Yap</TabsTrigger>
+              <TabsTrigger value="register" className="text-sm font-semibold">Kayıt Ol</TabsTrigger>
+            </TabsList>
+          </CardHeader>
+
+          <CardContent className="pt-4 px-8">
+            {errorMsg && (
+              <Alert variant="destructive" className="mb-6 animate-in slide-in-from-top-2 duration-300">
+                <Info className="h-4 w-4" />
+                <AlertTitle>Hata</AlertTitle>
+                <AlertDescription>{errorMsg}</AlertDescription>
+              </Alert>
+            )}
+
+            <TabsContent value="login" className="space-y-4 m-0">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="login-email">E-Posta</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="login-email"
+                      placeholder="ad@ornek.com"
+                      type="email"
+                      className="pl-10 h-11"
+                      value={loginEmail}
+                      onChange={e => setLoginEmail(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="login-password">Şifre</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="login-password"
+                      type="password"
+                      className="pl-10 h-11"
+                      placeholder="••••••"
+                      value={loginPassword}
+                      onChange={e => setLoginPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <Button
+                  className="w-full h-11 text-base font-semibold transition-all hover:scale-[1.01]"
+                  onClick={handleLogin}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    "Giriş Yap"
+                  )}
+                  {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
+                </Button>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="register" className="space-y-4 m-0">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="reg-name">Ad Soyad</Label>
+                  <div className="relative">
+                    <UserIcon className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="reg-name"
+                      placeholder="Ahmet Yılmaz"
+                      className="pl-10 h-11"
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="reg-email">E-Posta</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="reg-email"
+                      placeholder="ad@ornek.com"
+                      type="email"
+                      className="pl-10 h-11"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="reg-password">Şifre</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="reg-password"
+                      type="password"
+                      className="pl-10 h-11"
+                      placeholder="En az 6 karakter"
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <Button
+                  className="w-full h-11 text-base font-semibold transition-all hover:scale-[1.01]"
+                  onClick={handleRegister}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    "Kayıt Ol ve Takibe Başla"
+                  )}
+                  {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
+                </Button>
+              </div>
+            </TabsContent>
+          </CardContent>
+
+          <CardFooter className="flex flex-col space-y-4 pb-8 pt-2">
+            <div className="w-full flex items-center justify-center gap-2">
+              <Separator className="flex-1" />
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Hizmet ve Gizlilik</span>
+              <Separator className="flex-1" />
+            </div>
+            <p className="text-center text-[10px] text-slate-400 px-6 leading-normal">
+              Kaydolarak kullanım koşullarımızı ve aydınlatma metnini kabul etmiş sayılırsınız.
+              Verileriniz güvenle saklanmaktadır.
+            </p>
+          </CardFooter>
+        </Tabs>
+      </Card>
+
+      <div className="mt-8 text-slate-400 text-[11px] animate-in fade-in duration-1000 delay-700">
+        &copy; {new Date().getFullYear()} Risale-i Nur Okuma Takip Sistemi
+      </div>
     </div>
   );
 }
@@ -672,19 +885,98 @@ function CalendarView({ logs }) {
 }
 
 function FriendsView({ userId }) {
-  // Mock arkadaşlar listesi (Test için kendi ID'nizi kullanıyoruz)
-  const [friends, setFriends] = useState([
-    { id: userId, name: 'Kendim (Test)', lastReading: 'Demin okudu', active: true },
-  ]);
-  const [showAdd, setShowAdd] = useState(false);
-  const [idInput, setIdInput] = useState('');
+  const [groups, setGroups] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Modals
+  const [showAddGroup, setShowAddGroup] = useState(false);
+  const [groupNameInput, setGroupNameInput] = useState('');
+
+  const [activeGroupId, setActiveGroupId] = useState(null);
+  const [memberIdInput, setMemberIdInput] = useState('');
+
   const [selectedFriend, setSelectedFriend] = useState(null);
 
-  const handleAddFriend = () => {
-    if (!idInput) return;
-    setFriends([...friends, { id: idInput, name: `Kullanıcı ${idInput}`, lastReading: 'Henüz okumadı', active: false }]);
-    setIdInput('');
-    setShowAdd(false);
+  useEffect(() => {
+    // Grupları (ve üyeleri) çek. Supabase'de JSONB olarak tutuyoruz members'ı.
+    const fetchGroups = async () => {
+      const { data } = await supabase.from('following_groups').select('*').eq('user_id', userId);
+      if (data) setGroups(data);
+      setLoading(false);
+    };
+
+    fetchGroups();
+
+    const channel = supabase.channel('groups')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'following_groups', filter: `user_id=eq.${userId}` },
+        () => fetchGroups()
+      ).subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [userId]);
+
+  const handleAddGroup = async () => {
+    if (!groupNameInput.trim()) return;
+    try {
+      await supabase.from('following_groups').insert({
+        user_id: userId,
+        name: groupNameInput,
+        members: [] // JSONB array
+      });
+      setGroupNameInput('');
+      setShowAddGroup(false);
+    } catch (e) { console.error(e); }
+  };
+
+  const handleAddMember = async () => {
+    if (!memberIdInput.trim()) return;
+    try {
+      // 1. Kullanıcıyı bul
+      const { data: foundUsers } = await supabase.from('users').select('*').eq('public_id', memberIdInput.trim());
+
+      if (!foundUsers || foundUsers.length === 0) {
+        alert("Böyle bir Kullanıcı ID bulunamadı.");
+        return;
+      }
+
+      const foundUser = foundUsers[0];
+      const realMemberId = foundUser.id;
+      const name = foundUser.name || `Öğrenci ${memberIdInput}`;
+
+      // 2. Grubu güncelle
+      // Önce mevcut grubu bulalım
+      const groupidx = groups.findIndex(g => g.id === activeGroupId);
+      if (groupidx === -1) return;
+      const currentMembers = groups[groupidx].members || [];
+
+      // Ekle (eğer yoksa)
+      if (currentMembers.find(m => m.id === realMemberId)) {
+        alert("Zaten ekli.");
+        return;
+      }
+
+      const newMembers = [...currentMembers, { id: realMemberId, name }];
+
+      await supabase.from('following_groups').update({ members: newMembers }).eq('id', activeGroupId);
+
+      setMemberIdInput('');
+      setActiveGroupId(null);
+    } catch (e) {
+      console.error(e);
+      alert("Hata oluştu.");
+    }
+  };
+
+  const handleDeleteGroup = async (groupId) => {
+    if (!window.confirm("Bu grubu silmek istiyor musun?")) return;
+    await supabase.from('following_groups').delete().eq('id', groupId);
+  };
+
+  const handleRemoveMember = async (groupId, member) => {
+    if (!window.confirm(`${member.name} isimli kişiyi gruptan çıkarmak istiyor musun?`)) return;
+    const group = groups.find(g => g.id === groupId);
+    const newMembers = group.members.filter(m => m.id !== member.id);
+    await supabase.from('following_groups').update({ members: newMembers }).eq('id', groupId);
   };
 
   if (selectedFriend) {
@@ -694,44 +986,89 @@ function FriendsView({ userId }) {
   return (
     <div>
       <div className="header-row">
-        <h1>Talebeler / Arkadaşlar</h1>
-        <button onClick={() => setShowAdd(true)} style={{ color: 'var(--primary-color)', fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <Plus size={16} /> Ekle
+        <h1>Arkadaşlar</h1>
+        <button onClick={() => setShowAddGroup(true)} style={{ color: 'var(--primary-color)', fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <Plus size={16} /> Grup Ekle
         </button>
       </div>
 
-      {showAdd && (
-        <div className="card" style={{ animation: 'slideUp 0.2s' }}>
-          <div style={{ marginBottom: '8px', fontWeight: '500' }}>Kullanıcı ID Giriniz:</div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <input
-              style={{ margin: 0, padding: '8px', fontSize: '14px' }}
-              placeholder="örn: TR42X1"
-              value={idInput}
-              onChange={e => setIdInput(e.target.value)}
-            />
-            <button className="btn-primary" style={{ width: 'auto', padding: '0 16px' }} onClick={handleAddFriend}>Ekle</button>
+      {loading && <div style={{ color: '#94a3b8', textAlign: 'center' }}>Yükleniyor...</div>}
+
+      {!loading && groups.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
+          <Users size={48} style={{ opacity: 0.2, marginBottom: '16px' }} />
+          <p>Henüz hiç grup oluşturmadın.</p>
+          <button className="btn-primary" onClick={() => setShowAddGroup(true)} style={{ width: 'auto', margin: '0 auto' }}>Grup Oluştur</button>
+        </div>
+      )}
+
+      {groups.map(group => (
+        <div key={group.id} style={{ marginBottom: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', padding: '0 4px' }}>
+            <h3 style={{ margin: 0, color: 'var(--primary-color)', fontSize: '18px' }}>{group.name}</h3>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={() => setActiveGroupId(group.id)} style={{ fontSize: '12px', background: '#e0e7ff', color: '#4338ca', padding: '4px 8px', borderRadius: '6px', border: 'none' }}>+ Talebe Ekle</button>
+              <button onClick={() => handleDeleteGroup(group.id)} style={{ background: 'transparent', border: 'none', padding: 0 }}><X size={16} color="#ef4444" /></button>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gap: '8px' }}>
+            {group.members && group.members.length > 0 ? (
+              group.members.map(member => (
+                <div key={member.id} className="card" onClick={() => setSelectedFriend(member)} style={{ cursor: 'pointer', marginBottom: 0 }}>
+                  <div style={{
+                    width: '36px', height: '36px', borderRadius: '50%', background: '#f1f5f9',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#64748b'
+                  }}>
+                    {member.name.substring(0, 1)}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: '600', fontSize: '14px' }}>{member.name}</div>
+                    {/* Burada lastReading bilgisi yok, detayda var. */}
+                  </div>
+                  <button onClick={(e) => { e.stopPropagation(); handleRemoveMember(group.id, member); }} style={{ background: 'transparent', border: 'none' }}>
+                    <Trash2 size={16} color="#cbd5e1" />
+                  </button>
+                  <ChevronRight size={18} color="#cbd5e1" />
+                </div>
+              ))
+            ) : (
+              <div style={{ padding: '16px', background: '#f8fafc', borderRadius: '12px', fontSize: '13px', color: '#94a3b8', textAlign: 'center', border: '1px dashed #cbd5e1' }}>
+                Bu grupta henüz kimse yok.
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+
+      {/* Modals... */}
+      {showAddGroup && (
+        <div className="modal-overlay" onClick={() => setShowAddGroup(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="header-row">
+              <h3>Yeni Grup Oluştur</h3>
+              <button onClick={() => setShowAddGroup(false)}><X size={20} color="#64748b" /></button>
+            </div>
+            <input value={groupNameInput} onChange={e => setGroupNameInput(e.target.value)} placeholder="Grup Adı (örn: Liseli Talebeler)" autoFocus />
+            <button className="btn-primary" onClick={handleAddGroup}>Oluştur</button>
           </div>
         </div>
       )}
 
-      {friends.map((friend) => (
-        <div key={friend.id} className="card" onClick={() => setSelectedFriend(friend)} style={{ cursor: 'pointer' }}>
-          <div style={{
-            width: '40px', height: '40px', borderRadius: '50%', background: '#e2e8f0',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#64748b'
-          }}>
-            {friend.name.substring(0, 1)}
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: '600' }}>{friend.name}</div>
-            <div style={{ fontSize: '12px', color: friend.active ? 'var(--primary-color)' : '#94a3b8' }}>
-              {friend.lastReading}
+      {activeGroupId && (
+        <div className="modal-overlay" onClick={() => setActiveGroupId(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="header-row">
+              <h3>Talebe Ekle</h3>
+              <button onClick={() => setActiveGroupId(null)}><X size={20} color="#64748b" /></button>
             </div>
+            <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '12px' }}>Eklemek istediğin kişinin Kullanıcı ID'sini gir.</p>
+            <input value={memberIdInput} onChange={e => setMemberIdInput(e.target.value)} placeholder="Talebe ID (örn: TR99X123)" autoFocus />
+            <button className="btn-primary" onClick={handleAddMember}>Ekle</button>
           </div>
-          <ChevronRight size={20} color="#cbd5e1" />
         </div>
-      ))}
+      )}
+
     </div>
   );
 }
@@ -741,20 +1078,24 @@ function FriendDetailView({ friend, onBack }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Arkadaşın loglarını çek
-    const qLogs = query(collection(db, "users", friend.id, "reading_logs"), orderBy("date", "desc"));
-    const unsub = onSnapshot(qLogs, (snapshot) => {
-      const logsData = {};
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        if (!logsData[data.date]) logsData[data.date] = [];
-        logsData[data.date].push(data);
-      });
-      setLogs(logsData);
+    const fetchFriendLogs = async () => {
+      // Friend ID aslında Supabase User ID (Auth ID)
+      // Logları çek
+      const { data } = await supabase.from('reading_logs').select('*').eq('user_id', friend.id);
+
+      if (data) {
+        const logsMap = {};
+        data.forEach(log => {
+          const d = log.date;
+          if (!logsMap[d]) logsMap[d] = [];
+          logsMap[d].push(log); // log.amount, log.title
+        });
+        setLogs(logsMap);
+      }
       setLoading(false);
-    });
-    return () => unsub();
-  }, [friend.id]);
+    };
+    fetchFriendLogs();
+  }, [friend]);
 
   return (
     <div>
@@ -775,7 +1116,7 @@ function FriendDetailView({ friend, onBack }) {
   );
 }
 
-function ProfileView({ finishedStats, onShowHatimler, userId, onLogout }) {
+function ProfileView({ finishedStats, onShowHatimler, publicId, onLogout }) {
   const totalHatim = Object.values(finishedStats).reduce((a, b) => a + b, 0);
   return (
     <div>
@@ -792,7 +1133,7 @@ function ProfileView({ finishedStats, onShowHatimler, userId, onLogout }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', marginBottom: '16px',
           fontSize: '32px', fontWeight: 'bold'
         }}>
-          ?
+          {publicId ? publicId.substring(0, 2) : '?'}
         </div>
         <h2 style={{ fontSize: '20px', margin: '0 0 4px 0' }}>Talebe</h2>
         <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>Risale-i Nur Talebesi</p>
@@ -800,9 +1141,9 @@ function ProfileView({ finishedStats, onShowHatimler, userId, onLogout }) {
         <div style={{
           marginTop: '16px', background: '#f8fafc', padding: '12px 24px', borderRadius: '12px',
           border: '2px dashed #cbd5e1', textAlign: 'center', cursor: 'pointer', position: 'relative'
-        }} onClick={() => { navigator.clipboard.writeText(userId); alert("Kopyalandı: " + userId); }}>
-          <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '2px' }}>KULLANICI ID</div>
-          <div style={{ fontSize: '20px', fontWeight: '800', letterSpacing: '1px', color: 'var(--text-primary)' }}>{userId}</div>
+        }} onClick={() => { navigator.clipboard.writeText(publicId); alert("Kopyalandı: " + publicId); }}>
+          <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '2px' }}>KULLANICI ID (Paylaş)</div>
+          <div style={{ fontSize: '20px', fontWeight: '800', letterSpacing: '1px', color: 'var(--text-primary)' }}>{publicId}</div>
         </div>
       </div>
 
