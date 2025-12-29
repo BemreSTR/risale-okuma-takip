@@ -16,10 +16,10 @@ const COLORS = [
   '#0d9488', '#ec4899', '#6366f1', '#f59e0b', '#8b5cf6', '#10b981', '#3b82f6'
 ];
 
-// Sabit kullanıcı ID'si (Normalde Auth ile gelir)
-const USER_ID = "TR99X123";
-
 export default function App() {
+  // Auth State
+  const [userId, setUserId] = useState(localStorage.getItem('okuma_app_userid'));
+
   const [activeTab, setActiveTab] = useState('home');
   const [showHatimler, setShowHatimler] = useState(false);
   const [editHatimModal, setEditHatimModal] = useState(false);
@@ -40,15 +40,17 @@ export default function App() {
 
   // Firebase Listeners
   useEffect(() => {
+    if (!userId) return;
+
     // 1. Kitapları Dinle
-    const qBooks = query(collection(db, "users", USER_ID, "books"));
+    const qBooks = query(collection(db, "users", userId, "books"));
     const unsubBooks = onSnapshot(qBooks, (snapshot) => {
       const booksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setMyBooks(booksData);
     });
 
     // 2. İstatistikleri Dinle (Bitirilen Kitaplar)
-    const docRefStats = doc(db, "users", USER_ID, "stats", "general");
+    const docRefStats = doc(db, "users", userId, "stats", "general");
     const unsubStats = onSnapshot(docRefStats, (doc) => {
       if (doc.exists()) {
         setFinishedStats(doc.data());
@@ -58,7 +60,7 @@ export default function App() {
     });
 
     // 3. Okuma Kayıtlarını Dinle (Son 3 ay çekilebilir, şimdilik hepsi)
-    const qLogs = query(collection(db, "users", USER_ID, "reading_logs"), orderBy("date", "desc"));
+    const qLogs = query(collection(db, "users", userId, "reading_logs"), orderBy("date", "desc"));
     const unsubLogs = onSnapshot(qLogs, (snapshot) => {
       const logsData = {};
       snapshot.docs.forEach(doc => {
@@ -74,7 +76,7 @@ export default function App() {
       unsubStats();
       unsubLogs();
     };
-  }, []);
+  }, [userId]);
 
   // Helpers
   const getTodayStr = () => new Date().toISOString().split('T')[0];
@@ -126,13 +128,13 @@ export default function App() {
     try {
       // 1. Kitabın sayfa sayısını cache olarak güncelle (Opsiyonel ama iyi olur)
       // Artık UI buradan okumuyor ama veritabanında dursun.
-      const bookRef = doc(db, "users", USER_ID, "books", selectedBook.id);
+      const bookRef = doc(db, "users", userId, "books", selectedBook.id);
       await updateDoc(bookRef, {
         currentPages: increment(amount)
       });
 
       // 2. Log Ekle veya Güncelle
-      const logsRef = collection(db, "users", USER_ID, "reading_logs");
+      const logsRef = collection(db, "users", userId, "reading_logs");
       const q = query(
         logsRef,
         where("date", "==", dateInput),
@@ -143,7 +145,7 @@ export default function App() {
 
       if (!querySnapshot.empty) {
         const logDoc = querySnapshot.docs[0];
-        const logRef = doc(db, "users", USER_ID, "reading_logs", logDoc.id);
+        const logRef = doc(db, "users", userId, "reading_logs", logDoc.id);
         await updateDoc(logRef, {
           amount: increment(amount),
           timestamp: new Date()
@@ -171,7 +173,7 @@ export default function App() {
 
     try {
       // 1. İstatistik güncelle (Hatim sayısını artır)
-      const statsRef = doc(db, "users", USER_ID, "stats", "general");
+      const statsRef = doc(db, "users", userId, "stats", "general");
       // Belge yoksa setDoc merge ile oluşturur, varsa update eder gibi çalışır ama increment için setDoc merge gerekli olabilir yada önce get.
       // Firestore increment undefined fieldda çalışır ve field oluşturur.
       await setDoc(statsRef, {
@@ -179,7 +181,7 @@ export default function App() {
       }, { merge: true });
 
       // 2. Kitabı sıfırla (lastReset ekleyerek)
-      const bookRef = doc(db, "users", USER_ID, "books", book.id);
+      const bookRef = doc(db, "users", userId, "books", book.id);
       await updateDoc(bookRef, {
         currentPages: 0,
         lastReset: new Date()
@@ -198,7 +200,7 @@ export default function App() {
     }
 
     try {
-      await addDoc(collection(db, "users", USER_ID, "books"), {
+      await addDoc(collection(db, "users", userId, "books"), {
         title: title,
         currentPages: 0,
         addedAt: new Date()
@@ -213,11 +215,28 @@ export default function App() {
     e.stopPropagation();
     if (window.confirm("Bu kitabı listenden kaldırmak istediğine emin misin?")) {
       try {
-        await deleteDoc(doc(db, "users", USER_ID, "books", id));
+        await deleteDoc(doc(db, "users", userId, "books", id));
       } catch (error) {
         console.error("Silme hatası:", error);
       }
     }
+  }
+
+  const handleLogout = () => {
+    if (window.confirm("Çıkış yapmak istediğine emin misin?")) {
+      localStorage.removeItem('okuma_app_userid');
+      setUserId(null);
+      setMyBooks([]);
+      setLogs({});
+      setFinishedStats({});
+    }
+  };
+
+  if (!userId) {
+    return <AuthView onLogin={(id) => {
+      setUserId(id);
+      localStorage.setItem('okuma_app_userid', id);
+    }} />;
   }
 
   return (
@@ -238,7 +257,7 @@ export default function App() {
         {activeTab === 'profile' && showHatimler ? (
           <HatimlerView finishedStats={finishedStats} onBack={() => setShowHatimler(false)} onEdit={(book) => { setSelectedHatimBook(book); setHatimCountInput(String(finishedStats[book] || 0)); setEditHatimModal(true); }} />
         ) : activeTab === 'profile' && (
-          <ProfileView finishedStats={finishedStats} onShowHatimler={() => setShowHatimler(true)} />
+          <ProfileView finishedStats={finishedStats} onShowHatimler={() => setShowHatimler(true)} onLogout={handleLogout} />
         )}
       </div>
 
@@ -330,7 +349,7 @@ export default function App() {
               const count = parseInt(hatimCountInput);
               if (isNaN(count) || count < 0) return;
               try {
-                const statsRef = doc(db, "users", USER_ID, "stats", "general");
+                const statsRef = doc(db, "users", userId, "stats", "general");
                 await setDoc(statsRef, {
                   [selectedHatimBook]: count
                 }, { merge: true });
@@ -343,6 +362,86 @@ export default function App() {
         </div>
       )}
 
+    </div>
+  );
+}
+
+function AuthView({ onLogin }) {
+  const [isRegister, setIsRegister] = useState(false);
+  const [name, setName] = useState('');
+  const [inputId, setInputId] = useState('');
+
+  const generateId = () => {
+    // TR + 2 random number + X + 3 random number -> TR99X123 (8 char)
+    const r1 = Math.floor(Math.random() * 90 + 10); // 10-99
+    const r2 = Math.floor(Math.random() * 900 + 100); // 100-999
+    return `TR${r1}X${r2}`;
+  };
+
+  const handleRegister = async () => {
+    if (!name.trim()) return alert("Lütfen adınızı giriniz.");
+    const newId = generateId();
+
+    try {
+      await setDoc(doc(db, "users", newId), {
+        name: name,
+        createdAt: new Date()
+      });
+      alert(`Kaydınız oluşturuldu! Kullanıcı ID'niz: ${newId}. Lütfen bunu not edin.`);
+      onLogin(newId);
+    } catch (e) {
+      console.error(e);
+      alert("Kayıt sırasında hata oluştu.");
+    }
+  };
+
+  const handleLogin = async () => {
+    if (!inputId.trim()) return;
+    const cleanId = inputId.trim().toUpperCase();
+
+    // Basitçe giriş yap, ID doğrulaması yapılabilir ama şimdilik direkt giriş
+    onLogin(cleanId);
+  };
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', background: 'linear-gradient(to bottom, #f0fdfa, #ffffff)' }}>
+      <div style={{
+        width: '80px', height: '80px', background: 'var(--primary-color)', borderRadius: '20px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', marginBottom: '24px', boxShadow: '0 10px 25px -5px rgba(13, 148, 136, 0.4)'
+      }}>
+        <BookOpen size={40} />
+      </div>
+      <h1 style={{ fontSize: '24px', fontWeight: '800', color: '#1e293b', marginBottom: '8px' }}>Risale-i Nur Takip</h1>
+      <p style={{ color: '#64748b', textAlign: 'center', marginBottom: '32px' }}>Günlük okumalarını takip et, hatimlerini kaydet.</p>
+
+      <div className="card" style={{ width: '100%', maxWidth: '350px', padding: '24px' }}>
+        <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', marginBottom: '20px' }}>
+          <button
+            style={{ flex: 1, padding: '10px', background: 'none', borderBottom: isRegister ? 'none' : '2px solid var(--primary-color)', color: isRegister ? '#94a3b8' : 'var(--primary-color)', fontWeight: '600' }}
+            onClick={() => setIsRegister(false)}
+          >Giriş Yap</button>
+          <button
+            style={{ flex: 1, padding: '10px', background: 'none', borderBottom: isRegister ? '2px solid var(--primary-color)' : 'none', color: isRegister ? 'var(--primary-color)' : '#94a3b8', fontWeight: '600' }}
+            onClick={() => setIsRegister(true)}
+          >Yeni Talebe</button>
+        </div>
+
+        {isRegister ? (
+          <>
+            <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '4px' }}>Adınız Soyadınız</label>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="Örn: Ahmet Yılmaz" />
+            <button className="btn-primary" onClick={handleRegister}>Kayıt Ol</button>
+          </>
+        ) : (
+          <>
+            <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '4px' }}>Kullanıcı ID</label>
+            <input value={inputId} onChange={e => setInputId(e.target.value)} placeholder="Örn: TR99X123" />
+            <button className="btn-primary" onClick={handleLogin}>Giriş Yap</button>
+          </>
+        )}
+      </div>
+
+      <div style={{ marginTop: '24px', fontSize: '12px', color: '#94a3b8' }}>v1.0.0 • Mobile First Design</div>
     </div>
   );
 }
@@ -572,10 +671,10 @@ function CalendarView({ logs }) {
   );
 }
 
-function FriendsView() {
-  // Mock arkadaşlar listesi (Test için ID'yi "TR99X1" yaptık ki veri görebilelim)
+function FriendsView({ userId }) {
+  // Mock arkadaşlar listesi (Test için kendi ID'nizi kullanıyoruz)
   const [friends, setFriends] = useState([
-    { id: USER_ID, name: 'Kendim (Test)', lastReading: 'Demin okudu', active: true },
+    { id: userId, name: 'Kendim (Test)', lastReading: 'Demin okudu', active: true },
   ]);
   const [showAdd, setShowAdd] = useState(false);
   const [idInput, setIdInput] = useState('');
@@ -676,26 +775,34 @@ function FriendDetailView({ friend, onBack }) {
   );
 }
 
-function ProfileView({ finishedStats, onShowHatimler }) {
+function ProfileView({ finishedStats, onShowHatimler, userId, onLogout }) {
   const totalHatim = Object.values(finishedStats).reduce((a, b) => a + b, 0);
   return (
     <div>
-      <h1>Profil</h1>
-      <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px' }}>
+      <div className="header-row">
+        <h1>Profil</h1>
+        <button onClick={onLogout} style={{ fontSize: '12px', color: '#ef4444', fontWeight: '600', background: 'transparent', padding: '4px 8px', borderRadius: '6px', border: '1px solid #fee2e2' }}>
+          Çıkış Yap
+        </button>
+      </div>
+
+      <div className="card" style={{ flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '32px' }}>
         <div style={{
-          width: '80px', height: '80px', borderRadius: '50%', background: '#f0fdf4',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px',
-          color: '#15803d'
+          width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, #0d9488 0%, #115e59 100%)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', marginBottom: '16px',
+          fontSize: '32px', fontWeight: 'bold'
         }}>
-          <User size={40} />
+          ?
         </div>
-        <h2 style={{ marginBottom: '4px' }}>Misafir Okuyucu</h2>
+        <h2 style={{ fontSize: '20px', margin: '0 0 4px 0' }}>Talebe</h2>
+        <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>Risale-i Nur Talebesi</p>
+
         <div style={{
           marginTop: '16px', background: '#f8fafc', padding: '12px 24px', borderRadius: '12px',
           border: '2px dashed #cbd5e1', textAlign: 'center', cursor: 'pointer', position: 'relative'
-        }} onClick={() => { navigator.clipboard.writeText(USER_ID); alert("Kopyalandı: " + USER_ID); }}>
+        }} onClick={() => { navigator.clipboard.writeText(userId); alert("Kopyalandı: " + userId); }}>
           <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '2px' }}>KULLANICI ID</div>
-          <div style={{ fontSize: '20px', fontWeight: '800', letterSpacing: '1px', color: 'var(--text-primary)' }}>{USER_ID}</div>
+          <div style={{ fontSize: '20px', fontWeight: '800', letterSpacing: '1px', color: 'var(--text-primary)' }}>{userId}</div>
         </div>
       </div>
 
