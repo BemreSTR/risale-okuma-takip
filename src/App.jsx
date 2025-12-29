@@ -21,6 +21,10 @@ const USER_ID = "TR99X123";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
+  const [showHatimler, setShowHatimler] = useState(false);
+  const [editHatimModal, setEditHatimModal] = useState(false);
+  const [selectedHatimBook, setSelectedHatimBook] = useState(null);
+  const [hatimCountInput, setHatimCountInput] = useState('');
 
   // State
   const [myBooks, setMyBooks] = useState([]);
@@ -231,7 +235,11 @@ export default function App() {
         )}
         {activeTab === 'calendar' && <CalendarView logs={logs} />}
         {activeTab === 'friends' && <FriendsView />}
-        {activeTab === 'profile' && <ProfileView finishedStats={finishedStats} />}
+        {activeTab === 'profile' && showHatimler ? (
+          <HatimlerView finishedStats={finishedStats} onBack={() => setShowHatimler(false)} onEdit={(book) => { setSelectedHatimBook(book); setHatimCountInput(String(finishedStats[book] || 0)); setEditHatimModal(true); }} />
+        ) : activeTab === 'profile' && (
+          <ProfileView finishedStats={finishedStats} onShowHatimler={() => setShowHatimler(true)} />
+        )}
       </div>
 
       <NavBar activeTab={activeTab} setActiveTab={setActiveTab} />
@@ -293,6 +301,44 @@ export default function App() {
                 </button>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hatim Düzenleme Modalı */}
+      {editHatimModal && (
+        <div className="modal-overlay" onClick={() => setEditHatimModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="header-row">
+              <h3>Hatim Sayısı Düzenle</h3>
+              <button onClick={() => setEditHatimModal(false)}><X size={20} color="#64748b" /></button>
+            </div>
+            <p style={{ color: '#64748b', marginBottom: '24px' }}>
+              <span style={{ fontWeight: 600, color: 'var(--primary-color)' }}>{selectedHatimBook}</span> kitabını kaç kere bitirdin?
+            </p>
+            <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '4px' }}>Hatim Sayısı</label>
+            <input
+              type="number"
+              value={hatimCountInput}
+              onChange={e => setHatimCountInput(e.target.value)}
+              placeholder="0"
+              min="0"
+              autoFocus
+              style={{ marginTop: 0 }}
+            />
+            <button className="btn-primary" onClick={async () => {
+              const count = parseInt(hatimCountInput);
+              if (isNaN(count) || count < 0) return;
+              try {
+                const statsRef = doc(db, "users", USER_ID, "stats", "general");
+                await setDoc(statsRef, {
+                  [selectedHatimBook]: count
+                }, { merge: true });
+                setEditHatimModal(false);
+              } catch (error) {
+                console.error("Hatim güncelleme hatası:", error);
+              }
+            }}>Kaydet</button>
           </div>
         </div>
       )}
@@ -630,7 +676,8 @@ function FriendDetailView({ friend, onBack }) {
   );
 }
 
-function ProfileView({ finishedStats }) {
+function ProfileView({ finishedStats, onShowHatimler }) {
+  const totalHatim = Object.values(finishedStats).reduce((a, b) => a + b, 0);
   return (
     <div>
       <h1>Profil</h1>
@@ -652,17 +699,60 @@ function ProfileView({ finishedStats }) {
         </div>
       </div>
 
-      <h3>Başarılar (Hatimler)</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-        {Object.entries(finishedStats).length === 0 ? (
-          <div style={{ gridColumn: 'span 2', color: '#94a3b8', textAlign: 'center', padding: '20px', background: '#fff', borderRadius: '16px' }}>Henüz bitirilen kitap yok.</div>
-        ) : Object.entries(finishedStats).map(([title, count]) => (
-          <div key={title} className="card" style={{ flexDirection: 'column', gap: '4px', alignItems: 'flex-start', marginBottom: 0 }}>
-            <span style={{ fontSize: '12px', color: '#64748b' }}>Bitirilen</span>
-            <span style={{ fontWeight: '600' }}>{title}</span>
-            <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary-color)' }}>{count} <span style={{ fontSize: '12px' }}>defa</span></div>
-          </div>
-        ))}
+      <div className="card" onClick={onShowHatimler} style={{ cursor: 'pointer', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: '12px', color: '#94a3b8' }}>Toplam Hatim</div>
+          <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary-color)' }}>{totalHatim} <span style={{ fontSize: '12px' }}>kitap</span></div>
+        </div>
+        <ChevronRight size={24} color="#cbd5e1" />
+      </div>
+    </div>
+  );
+}
+
+function HatimlerView({ finishedStats, onBack, onEdit }) {
+  return (
+    <div>
+      <div className="header-row">
+        <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#64748b' }}>
+          <ChevronRight size={20} style={{ transform: 'rotate(180deg)' }} /> Geri
+        </button>
+        <h1 style={{ margin: 0 }}>Hatimler</h1>
+        <div style={{ width: 24 }}></div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {RISALE_BOOKS.map((bookTitle, index) => {
+          const count = finishedStats[bookTitle] || 0;
+          const color = COLORS[index % COLORS.length];
+          return (
+            <div
+              key={bookTitle}
+              className="card"
+              onClick={() => onEdit(bookTitle)}
+              style={{ cursor: 'pointer' }}
+            >
+              <div style={{
+                width: '40px', height: '54px',
+                background: color, borderRadius: '6px',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'white', fontWeight: 'bold', fontSize: '12px',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                flexShrink: 0
+              }}>
+                {bookTitle.substring(0, 1)}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '600' }}>{bookTitle}</div>
+                <div style={{ fontSize: '12px', color: '#94a3b8' }}>Bitirme sayısı</div>
+              </div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary-color)' }}>
+                {count}
+              </div>
+              <ChevronRight size={20} color="#cbd5e1" style={{ marginLeft: '8px' }} />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
