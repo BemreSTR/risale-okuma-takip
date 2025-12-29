@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Home, Calendar, Users, User, Plus, X, ChevronRight, BookOpen, CheckCircle, Trash2 } from 'lucide-react';
+import { Home, Calendar, Users, User, Plus, X, ChevronRight, BookOpen, CheckCircle, Trash2, Settings2, Pencil } from 'lucide-react';
 import './index.css';
 import { auth } from './firebase';
 import { supabase } from './supabase';
@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
-import { Mail, Lock, User as UserIcon, ArrowRight, Loader2, Info } from 'lucide-react';
+import { Mail, Lock, User as UserIcon, ArrowRight, Loader2, Info, Eye, EyeOff } from 'lucide-react';
 
 // Risale-i Nur Külliyatı (14 Temel Kitap)
 const RISALE_BOOKS = [
@@ -238,7 +238,7 @@ export default function App() {
 
     try {
       // 1. İstatistik Upsert
-      const { data: existingStat } = await supabase.from('book_stats').select('*').eq('user_id', uid).eq('book_title', book.title).single();
+      const { data: existingStat } = await supabase.from('book_stats').select('*').eq('user_id', uid).eq('book_title', book.title).maybeSingle();
       const currentCount = existingStat ? existingStat.count : 0;
 
       if (existingStat) {
@@ -307,6 +307,8 @@ export default function App() {
           <HomeView
             books={myBooks}
             finishedStats={finishedStats}
+            logs={logs}
+            getBookProgress={getBookProgress}
             onBookClick={handleBookClick}
             onFinish={handleFinishBook}
             onRemove={handleRemoveBook}
@@ -326,6 +328,7 @@ export default function App() {
             finishedStats={finishedStats}
             onShowHatimler={() => setShowHatimler(true)}
             publicId={userProfile?.public_id || '...'}
+            name={userProfile?.name || 'Misafir'}
             onLogout={handleLogout}
           />
         )}
@@ -421,7 +424,7 @@ export default function App() {
               try {
                 const uid = getUserId();
                 // Find existing stat
-                const { data: existing } = await supabase.from('book_stats').select('*').eq('user_id', uid).eq('book_title', selectedHatimBook).single();
+                const { data: existing } = await supabase.from('book_stats').select('*').eq('user_id', uid).eq('book_title', selectedHatimBook).maybeSingle();
                 if (existing) {
                   await supabase.from('book_stats').update({ count }).eq('id', existing.id);
                 } else {
@@ -448,14 +451,18 @@ function AuthView() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   // Login Form
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
 
   const generatePublicId = () => {
-    const r1 = Math.floor(Math.random() * 90 + 10);
-    const r2 = Math.floor(Math.random() * 900 + 100);
+    // TR + 4 rakam + X + 4 rakam (Örn: TR1234X5678)
+    // Bu format 100.000.000 (yüz milyon) farklı kombinasyon sağlar.
+    const r1 = Math.floor(Math.random() * 9000 + 1000);
+    const r2 = Math.floor(Math.random() * 9000 + 1000);
     return `TR${r1}X${r2}`;
   };
 
@@ -466,11 +473,29 @@ function AuthView() {
     setErrorMsg('');
     setLoading(true);
     try {
+      // 1. Benzersiz bir Public ID bulana kadar dene
+      let publicId = "";
+      let isUnique = false;
+      let attempts = 0;
+
+      while (!isUnique && attempts < 5) {
+        const candidateId = generatePublicId();
+        const { data } = await supabase.from('users').select('public_id').eq('public_id', candidateId).maybeSingle();
+        if (!data) {
+          publicId = candidateId;
+          isUnique = true;
+        }
+        attempts++;
+      }
+
+      if (!publicId) throw new Error("ID oluşturulamadı, lütfen tekrar deneyin.");
+
+      // 2. Firebase User Oluştur
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
       await updateProfile(user, { displayName: name });
 
-      const publicId = generatePublicId();
+      // 3. Supabase Kaydı
       await supabase.from('users').insert({
         id: user.uid,
         name: name,
@@ -502,6 +527,15 @@ function AuthView() {
       setLoading(false);
     }
   };
+  const handleLoginSubmit = (e) => {
+    e.preventDefault();
+    handleLogin();
+  };
+
+  const handleRegisterSubmit = (e) => {
+    e.preventDefault();
+    handleRegister();
+  };
 
   return (
     <div className="min-h-screen w-full bg-slate-50 flex flex-col items-center justify-center p-4">
@@ -512,7 +546,7 @@ function AuthView() {
         </div>
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">Risale-i Nur Takip</h1>
-          <p className="text-slate-500 text-sm">Ruhuna gıda, aklına nûr olanı takip et.</p>
+          <p className="text-slate-500 text-sm">Okumak bir şeydir, ama her şey o bir şeyden çıkıyor. </p>
         </div>
       </div>
 
@@ -535,7 +569,7 @@ function AuthView() {
             )}
 
             <TabsContent value="login" className="space-y-4 m-0">
-              <div className="space-y-4">
+              <form onSubmit={handleLoginSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="login-email">E-Posta</Label>
                   <div className="relative">
@@ -556,17 +590,24 @@ function AuthView() {
                     <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                     <Input
                       id="login-password"
-                      type="password"
-                      className="pl-10 h-11"
+                      type={showLoginPassword ? "text" : "password"}
+                      className="pl-10 pr-10 h-11"
                       placeholder="••••••"
                       value={loginPassword}
                       onChange={e => setLoginPassword(e.target.value)}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowLoginPassword(!showLoginPassword)}
+                      className="absolute right-3 top-3 text-muted-foreground hover:text-foreground"
+                    >
+                      {showLoginPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
                   </div>
                 </div>
                 <Button
+                  type="submit"
                   className="w-full h-11 text-base font-semibold transition-all hover:scale-[1.01]"
-                  onClick={handleLogin}
                   disabled={loading}
                 >
                   {loading ? (
@@ -576,11 +617,11 @@ function AuthView() {
                   )}
                   {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
                 </Button>
-              </div>
+              </form>
             </TabsContent>
 
             <TabsContent value="register" className="space-y-4 m-0">
-              <div className="space-y-4">
+              <form onSubmit={handleRegisterSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="reg-name">Ad Soyad</Label>
                   <div className="relative">
@@ -614,17 +655,24 @@ function AuthView() {
                     <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                     <Input
                       id="reg-password"
-                      type="password"
-                      className="pl-10 h-11"
+                      type={showPassword ? "text" : "password"}
+                      className="pl-10 pr-10 h-11"
                       placeholder="En az 6 karakter"
                       value={password}
                       onChange={e => setPassword(e.target.value)}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-3 text-muted-foreground hover:text-foreground"
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
                   </div>
                 </div>
                 <Button
+                  type="submit"
                   className="w-full h-11 text-base font-semibold transition-all hover:scale-[1.01]"
-                  onClick={handleRegister}
                   disabled={loading}
                 >
                   {loading ? (
@@ -634,7 +682,7 @@ function AuthView() {
                   )}
                   {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
                 </Button>
-              </div>
+              </form>
             </TabsContent>
           </CardContent>
 
@@ -659,7 +707,7 @@ function AuthView() {
   );
 }
 
-function HomeView({ books, onBookClick, onFinish, onRemove, onAddClick, finishedStats }) {
+function HomeView({ books, finishedStats, logs, getBookProgress, onBookClick, onFinish, onRemove, onAddClick }) {
   return (
     <div>
       <div className="header-row">
@@ -671,7 +719,6 @@ function HomeView({ books, onBookClick, onFinish, onRemove, onAddClick, finished
 
       {books.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px 20px', color: '#64748b' }}>
-          <BookOpen size={48} style={{ opacity: 0.2, marginBottom: '16px' }} />
           <p>Henüz okunacak bir kitap eklemedin.</p>
           <button className="btn-primary" style={{ marginTop: '20px' }} onClick={onAddClick}>
             Kitap Ekle
@@ -710,7 +757,7 @@ function HomeView({ books, onBookClick, onFinish, onRemove, onAddClick, finished
                   <div>
                     <div style={{ fontSize: '12px', color: '#94a3b8' }}>Şu an okunan</div>
                     <div style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
-                      {book.currentPages} <span style={{ fontSize: '12px', fontWeight: 'normal' }}>sayfa</span>
+                      {getBookProgress(book)} <span style={{ fontSize: '12px', fontWeight: 'normal' }}>sayfa</span>
                     </div>
                   </div>
 
@@ -892,10 +939,15 @@ function FriendsView({ userId }) {
   const [showAddGroup, setShowAddGroup] = useState(false);
   const [groupNameInput, setGroupNameInput] = useState('');
 
+  const [showEditGroup, setShowEditGroup] = useState(false);
+  const [editingGroupId, setEditingGroupId] = useState(null);
+  const [editGroupNameInput, setEditGroupNameInput] = useState('');
+
   const [activeGroupId, setActiveGroupId] = useState(null);
   const [memberIdInput, setMemberIdInput] = useState('');
 
   const [selectedFriend, setSelectedFriend] = useState(null);
+  const [movingMember, setMovingMember] = useState(null); // { member, currentGroupId }
 
   useEffect(() => {
     // Grupları (ve üyeleri) çek. Supabase'de JSONB olarak tutuyoruz members'ı.
@@ -972,11 +1024,56 @@ function FriendsView({ userId }) {
     await supabase.from('following_groups').delete().eq('id', groupId);
   };
 
+  const handleEditGroup = async () => {
+    if (!editGroupNameInput.trim()) return;
+    try {
+      await supabase.from('following_groups').update({ name: editGroupNameInput }).eq('id', editingGroupId);
+      setShowEditGroup(false);
+      setEditingGroupId(null);
+      setEditGroupNameInput('');
+    } catch (e) {
+      console.error(e);
+      alert("Düzenleme hatası.");
+    }
+  };
+
+  const openEditGroup = (group) => {
+    setEditingGroupId(group.id);
+    setEditGroupNameInput(group.name);
+    setShowEditGroup(true);
+  };
+
   const handleRemoveMember = async (groupId, member) => {
     if (!window.confirm(`${member.name} isimli kişiyi gruptan çıkarmak istiyor musun?`)) return;
     const group = groups.find(g => g.id === groupId);
     const newMembers = group.members.filter(m => m.id !== member.id);
     await supabase.from('following_groups').update({ members: newMembers }).eq('id', groupId);
+  };
+
+  const handleMoveMember = async (targetGroupId) => {
+    if (!movingMember || !targetGroupId) return;
+    const { member, currentGroupId } = movingMember;
+
+    try {
+      // 1. Eski gruptan çıkar
+      const sourceGroup = groups.find(g => g.id === currentGroupId);
+      const filteredMembers = sourceGroup.members.filter(m => m.id !== member.id);
+
+      // 2. Yeni gruba ekle
+      const targetGroup = groups.find(g => g.id === targetGroupId);
+      const updatedTargetMembers = [...(targetGroup.members || []), member];
+
+      // Paralel güncelleme (Veya sırayla)
+      await Promise.all([
+        supabase.from('following_groups').update({ members: filteredMembers }).eq('id', currentGroupId),
+        supabase.from('following_groups').update({ members: updatedTargetMembers }).eq('id', targetGroupId)
+      ]);
+
+      setMovingMember(null);
+    } catch (e) {
+      console.error(e);
+      alert("Taşıma hatası.");
+    }
   };
 
   if (selectedFriend) {
@@ -996,8 +1093,7 @@ function FriendsView({ userId }) {
 
       {!loading && groups.length === 0 && (
         <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
-          <Users size={48} style={{ opacity: 0.2, marginBottom: '16px' }} />
-          <p>Henüz hiç grup oluşturmadın.</p>
+          <p>Henüz hiç grup oluşturmadın.</p> <br />
           <button className="btn-primary" onClick={() => setShowAddGroup(true)} style={{ width: 'auto', margin: '0 auto' }}>Grup Oluştur</button>
         </div>
       )}
@@ -1005,7 +1101,12 @@ function FriendsView({ userId }) {
       {groups.map(group => (
         <div key={group.id} style={{ marginBottom: '24px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', padding: '0 4px' }}>
-            <h3 style={{ margin: 0, color: 'var(--primary-color)', fontSize: '18px' }}>{group.name}</h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h3 style={{ margin: 0, color: 'var(--primary-color)', fontSize: '18px' }}>{group.name}</h3>
+              <button onClick={() => openEditGroup(group)} style={{ background: 'transparent', border: 'none', padding: '4px', cursor: 'pointer' }}>
+                <Pencil size={14} color="#94a3b8" />
+              </button>
+            </div>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button onClick={() => setActiveGroupId(group.id)} style={{ fontSize: '12px', background: '#e0e7ff', color: '#4338ca', padding: '4px 8px', borderRadius: '6px', border: 'none' }}>+ Talebe Ekle</button>
               <button onClick={() => handleDeleteGroup(group.id)} style={{ background: 'transparent', border: 'none', padding: 0 }}><X size={16} color="#ef4444" /></button>
@@ -1026,9 +1127,14 @@ function FriendsView({ userId }) {
                     <div style={{ fontWeight: '600', fontSize: '14px' }}>{member.name}</div>
                     {/* Burada lastReading bilgisi yok, detayda var. */}
                   </div>
-                  <button onClick={(e) => { e.stopPropagation(); handleRemoveMember(group.id, member); }} style={{ background: 'transparent', border: 'none' }}>
-                    <Trash2 size={16} color="#cbd5e1" />
-                  </button>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <button onClick={(e) => { e.stopPropagation(); setMovingMember({ member, currentGroupId: group.id }); }} style={{ background: 'transparent', border: 'none', padding: '4px' }}>
+                      <Settings2 size={16} color="#94a3b8" />
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handleRemoveMember(group.id, member); }} style={{ background: 'transparent', border: 'none', padding: '4px' }}>
+                      <Trash2 size={16} color="#ef4444" opacity={0.5} />
+                    </button>
+                  </div>
                   <ChevronRight size={18} color="#cbd5e1" />
                 </div>
               ))
@@ -1055,6 +1161,19 @@ function FriendsView({ userId }) {
         </div>
       )}
 
+      {showEditGroup && (
+        <div className="modal-overlay" onClick={() => { setShowEditGroup(false); setEditingGroupId(null); setEditGroupNameInput(''); }}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="header-row">
+              <h3>Grubu Düzenle</h3>
+              <button onClick={() => { setShowEditGroup(false); setEditingGroupId(null); setEditGroupNameInput(''); }}><X size={20} color="#64748b" /></button>
+            </div>
+            <input value={editGroupNameInput} onChange={e => setEditGroupNameInput(e.target.value)} placeholder="Grup Adı" autoFocus />
+            <button className="btn-primary" onClick={handleEditGroup}>Kaydet</button>
+          </div>
+        </div>
+      )}
+
       {activeGroupId && (
         <div className="modal-overlay" onClick={() => setActiveGroupId(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -1065,6 +1184,39 @@ function FriendsView({ userId }) {
             <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '12px' }}>Eklemek istediğin kişinin Kullanıcı ID'sini gir.</p>
             <input value={memberIdInput} onChange={e => setMemberIdInput(e.target.value)} placeholder="Talebe ID (örn: TR99X123)" autoFocus />
             <button className="btn-primary" onClick={handleAddMember}>Ekle</button>
+          </div>
+        </div>
+      )}
+
+      {movingMember && (
+        <div className="modal-overlay" onClick={() => setMovingMember(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="header-row">
+              <h3>Grubu Değiştir</h3>
+              <button onClick={() => setMovingMember(null)}><X size={20} color="#64748b" /></button>
+            </div>
+            <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '16px' }}>
+              <strong>{movingMember.member.name}</strong> isimli kişiyi hangi gruba taşımak istiyorsun?
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {groups.filter(g => g.id !== movingMember.currentGroupId).length > 0 ? (
+                groups.filter(g => g.id !== movingMember.currentGroupId).map(group => (
+                  <button
+                    key={group.id}
+                    onClick={() => handleMoveMember(group.id)}
+                    style={{
+                      textAlign: 'left', padding: '12px', borderRadius: '12px',
+                      background: '#f1f5f9', border: '1px solid #e2e8f0',
+                      fontWeight: '500', color: '#1e293b'
+                    }}
+                  >
+                    {group.name}
+                  </button>
+                ))
+              ) : (
+                <p style={{ fontSize: '12px', color: '#ef4444', textAlign: 'center' }}>Taşıyabileceğin başka bir grup bulunmuyor.</p>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1116,8 +1268,8 @@ function FriendDetailView({ friend, onBack }) {
   );
 }
 
-function ProfileView({ finishedStats, onShowHatimler, publicId, onLogout }) {
-  const totalHatim = Object.values(finishedStats).reduce((a, b) => a + b, 0);
+function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout }) {
+  const hatimCount = Math.min(...RISALE_BOOKS.map(title => finishedStats[title] || 0));
   return (
     <div>
       <div className="header-row">
@@ -1133,16 +1285,16 @@ function ProfileView({ finishedStats, onShowHatimler, publicId, onLogout }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', marginBottom: '16px',
           fontSize: '32px', fontWeight: 'bold'
         }}>
-          {publicId ? publicId.substring(0, 2) : '?'}
+          {name ? name.substring(0, 2).toUpperCase() : '??'}
         </div>
-        <h2 style={{ fontSize: '20px', margin: '0 0 4px 0' }}>Talebe</h2>
-        <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>Risale-i Nur Talebesi</p>
+        <h2 style={{ fontSize: '20px', margin: '0 0 4px 0' }}>{name}</h2>
+        <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>Risale-i Nur Okuyucusu</p>
 
         <div style={{
           marginTop: '16px', background: '#f8fafc', padding: '12px 24px', borderRadius: '12px',
           border: '2px dashed #cbd5e1', textAlign: 'center', cursor: 'pointer', position: 'relative'
         }} onClick={() => { navigator.clipboard.writeText(publicId); alert("Kopyalandı: " + publicId); }}>
-          <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '2px' }}>KULLANICI ID (Paylaş)</div>
+          <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '2px' }}>KULLANICI ID (kopyala)</div>
           <div style={{ fontSize: '20px', fontWeight: '800', letterSpacing: '1px', color: 'var(--text-primary)' }}>{publicId}</div>
         </div>
       </div>
@@ -1150,7 +1302,7 @@ function ProfileView({ finishedStats, onShowHatimler, publicId, onLogout }) {
       <div className="card" onClick={onShowHatimler} style={{ cursor: 'pointer', justifyContent: 'space-between' }}>
         <div>
           <div style={{ fontSize: '12px', color: '#94a3b8' }}>Toplam Hatim</div>
-          <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary-color)' }}>{totalHatim} <span style={{ fontSize: '12px' }}>kitap</span></div>
+          <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary-color)' }}>{hatimCount} <span style={{ fontSize: '12px' }}>hatim</span></div>
         </div>
         <ChevronRight size={24} color="#cbd5e1" />
       </div>
