@@ -579,6 +579,8 @@ function AuthView() {
                       id="login-email"
                       placeholder="ad@ornek.com"
                       type="email"
+                      autoComplete="email"
+                      required
                       className="pl-10 h-11"
                       value={loginEmail}
                       onChange={e => setLoginEmail(e.target.value)}
@@ -592,6 +594,8 @@ function AuthView() {
                     <Input
                       id="login-password"
                       type={showLoginPassword ? "text" : "password"}
+                      autoComplete="current-password"
+                      required
                       className="pl-10 pr-10 h-11"
                       placeholder="••••••"
                       value={loginPassword}
@@ -630,6 +634,8 @@ function AuthView() {
                     <Input
                       id="reg-name"
                       placeholder="Ahmet Yılmaz"
+                      autoComplete="name"
+                      required
                       className="pl-10 h-11"
                       value={name}
                       onChange={e => setName(e.target.value)}
@@ -644,6 +650,8 @@ function AuthView() {
                       id="reg-email"
                       placeholder="ad@ornek.com"
                       type="email"
+                      autoComplete="email"
+                      required
                       className="pl-10 h-11"
                       value={email}
                       onChange={e => setEmail(e.target.value)}
@@ -657,6 +665,8 @@ function AuthView() {
                     <Input
                       id="reg-password"
                       type={showPassword ? "text" : "password"}
+                      autoComplete="new-password"
+                      required
                       className="pl-10 pr-10 h-11"
                       placeholder="En az 6 karakter"
                       value={password}
