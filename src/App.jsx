@@ -47,6 +47,8 @@ export default function App() {
   // UI States
   const [readModalOpen, setReadModalOpen] = useState(false);
   const [addBookModalOpen, setAddBookModalOpen] = useState(false);
+  const [showPasswordReset, setShowPasswordReset] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
   const [selectedBook, setSelectedBook] = useState(null);
   const [pagesInput, setPagesInput] = useState('');
   const [dateInput, setDateInput] = useState('');
@@ -54,20 +56,30 @@ export default function App() {
 
   // 1. Auth Listener
   useEffect(() => {
-    // Check initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         setCurrentUser(session.user);
         fetchUserProfile(session.user.id);
       }
       setLoadingAuth(false);
+
+      // Hash kontrolü (Fallback): Supabase bazen event fırlatmadan önce redirect edebilir
+      if (window.location.hash && window.location.hash.includes('type=recovery')) {
+        console.log("Recovery hash detected!");
+        setShowPasswordReset(true);
+      }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log("Auth Event:", event);
+      if (event === 'PASSWORD_RECOVERY') {
+        setShowPasswordReset(true);
+      }
+
       const user = session?.user || null;
       setCurrentUser(user);
       if (user) {
-        await fetchUserProfile(user.id);
+        fetchUserProfile(user.id);
       } else {
         setUserProfile(null);
       }
@@ -77,24 +89,9 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const fetchUserProfile = async (uid, retry = true) => {
-    try {
-      const { data, error } = await supabase.from('users').select('*').eq('id', uid).maybeSingle();
-
-      if (error) {
-        console.error("Profil çekme hatası:", error);
-        return;
-      }
-
-      if (data) {
-        setUserProfile(data);
-      } else if (retry) {
-        // Yeni kayıtlarda trigger'ın tamamlanması için çok kısa bir süre bekleyip tekrar deneyelim
-        setTimeout(() => fetchUserProfile(uid, false), 1500);
-      }
-    } catch (e) {
-      console.error("Profil fetch hatası:", e);
-    }
+  const fetchUserProfile = async (uid) => {
+    const { data } = await supabase.from('users').select('*').eq('id', uid).maybeSingle();
+    if (data) setUserProfile(data);
   };
 
   // 1.5 Bildirim Hatırlatıcı (21:00)
@@ -167,7 +164,12 @@ export default function App() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'books', filter: `user_id=eq.${userId}` },
         (payload) => {
-          if (payload.eventType === 'INSERT') setMyBooks(prev => [...prev, payload.new]);
+          if (payload.eventType === 'INSERT') {
+            setMyBooks(prev => {
+              if (prev.find(b => b.id === payload.new.id)) return prev;
+              return [...prev, payload.new];
+            });
+          }
           else if (payload.eventType === 'DELETE') setMyBooks(prev => prev.filter(b => b.id !== payload.old.id));
           else if (payload.eventType === 'UPDATE') setMyBooks(prev => prev.map(b => b.id === payload.new.id ? payload.new : b));
         }
@@ -227,12 +229,23 @@ export default function App() {
     setReadModalOpen(true);
   };
 
+  const validatePagesInput = (value) => {
+    const num = parseInt(value)
+    if (isNaN(num)) return { valid: false, error: 'Geçerli bir sayfa sayısı giriniz' }
+    if (num < 1) return { valid: false, error: 'En az 1 sayfa girmelisiniz' }
+    if (num > 1000) return { valid: false, error: 'Günlük maksimum 1000 sayfa girebilirsiniz' }
+    return { valid: true, value: num }
+  }
+
   const handleSaveReading = async () => {
-    if (!pagesInput || isNaN(pagesInput)) return;
-    const amount = parseInt(pagesInput);
-    if (amount <= 0) return;
-    const uid = getUserId();
-    if (!uid) return;
+    const validation = validatePagesInput(pagesInput)
+    if (!validation.valid) {
+      alert(validation.error)
+      return
+    }
+    const amount = validation.value
+    const uid = getUserId()
+    if (!uid) return
 
     try {
       // 1. Kitap Sayfasını Güncelle
@@ -315,16 +328,39 @@ export default function App() {
       return;
     }
     const uid = getUserId();
+    console.log("handleAddBook Debug:", { uid, title }); // Debug log
+    if (!uid) {
+      console.error("Hata: Kullanıcı oturumu bulunamadı!");
+      return;
+    }
+
     try {
-      await supabase.from('books').insert({
+      const { data, error } = await supabase.from('books').insert({
         user_id: uid,
         title: title,
         current_pages: 0,
         added_at: new Date().toISOString()
-      });
+      }).select();
+
+      if (error) {
+        console.error("Supabase Insert Error:", error);
+        throw error;
+      }
+
+      console.log("Kitap eklendi:", data);
+
+      // UI'ı anında güncelle
+      if (data && data.length > 0) {
+        setMyBooks(prev => {
+          if (prev.find(b => b.id === data[0].id)) return prev;
+          return [...prev, data[0]];
+        });
+      }
+
       setAddBookModalOpen(false);
     } catch (error) {
-      console.error("Ekleme hatası:", error);
+      console.error("Ekleme hatası (catch):", error);
+      alert("Kitap eklenirken bir hata oluştu: " + error.message);
     }
   };
 
@@ -337,16 +373,7 @@ export default function App() {
 
   const handleLogout = async () => {
     if (window.confirm("Çıkış yapmak istediğine emin misin?")) {
-      // State'i hemen temizle (anında feedback için)
-      setMyBooks([]);
-      setLogs({});
-      setFinishedStats({});
-      setUserProfile(null);
-
-      // signOut işlemini arka planda çalıştır
-      supabase.auth.signOut().catch(err => {
-        console.error("Çıkış hatası:", err);
-      });
+      await supabase.auth.signOut();
     }
   };
 
@@ -354,22 +381,45 @@ export default function App() {
   const [newNameInput, setNewNameInput] = useState('');
 
   const handleUpdateName = async () => {
-    if (!newNameInput.trim()) return;
+    const validation = validateName(newNameInput)
+    if (!validation.valid) {
+      alert(validation.error)
+      return
+    }
     try {
       const uid = currentUser.id;
+
       const { error: authError } = await supabase.auth.updateUser({
         data: { name: newNameInput }
       });
       if (authError) throw authError;
 
-      const { error: dbError } = await supabase.from('users').update({ name: newNameInput }).eq('id', uid);
-      if (dbError) throw dbError;
-
+      const { error } = await supabase.from('users').update({ name: newNameInput }).eq('id', uid);
+      if (error) throw error;
       setUserProfile(prev => ({ ...prev, name: newNameInput }));
       setEditNameModal(false);
     } catch (e) {
       console.error(e);
       alert("İsim güncellenirken hata oluştu.");
+    }
+  };
+
+  const handleUpdatePassword = async () => {
+    if (newPassword.length < 6) {
+      alert("Şifre en az 6 karakter olmalıdır.");
+      return;
+    }
+
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+
+      alert("Şifreniz başarıyla güncellendi!");
+      setShowPasswordReset(false);
+      setNewPassword('');
+    } catch (error) {
+      console.error("Şifre güncelleme hatası:", error);
+      alert("Şifre güncellenirken bir hata oluştu: " + error.message);
     }
   };
 
@@ -407,16 +457,15 @@ export default function App() {
             <ProfileView
               finishedStats={finishedStats}
               onShowHatimler={() => setShowHatimler(true)}
-              publicId={userProfile?.public_id || currentUser?.user_metadata?.public_id || 'TR....'}
-              name={userProfile?.name || currentUser?.user_metadata?.name || 'Yükleniyor...'}
+              publicId={userProfile?.public_id || '...'}
+              name={userProfile?.name || 'Misafir'}
               onLogout={handleLogout}
               requestNotifPermission={requestNotifPermission}
               notifPermission={notifPermission}
               onEditName={() => {
-                setNewNameInput(userProfile?.name || currentUser?.user_metadata?.name || '');
+                setNewNameInput(userProfile?.name || '');
                 setEditNameModal(true);
               }}
-              onRefresh={() => fetchUserProfile(currentUser.id)}
             />
           )
         )}
@@ -535,8 +584,12 @@ export default function App() {
             <button className="btn-primary" onClick={async () => {
               const count = parseInt(hatimCountInput);
               if (isNaN(count) || count < 0) return;
+              if (count > 1000) {
+                alert("Hatim sayısı 1000'den büyük olamaz");
+                return;
+              }
               try {
-                const uid = currentUser.id;
+                const uid = getUserId();
                 // Find existing stat
                 const { data: existing } = await supabase.from('book_stats').select('*').eq('user_id', uid).eq('book_title', selectedHatimBook).maybeSingle();
                 if (existing) {
@@ -560,7 +613,6 @@ export default function App() {
 function AuthView() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
 
   // Register Form
   const [name, setName] = useState('');
@@ -581,9 +633,27 @@ function AuthView() {
     return `TR${r1}X${r2}`;
   };
 
+  const validateName = (value) => {
+    if (!value || value.trim().length === 0) return { valid: false, error: 'İsim gereklidir' }
+    if (value.length > 100) return { valid: false, error: 'İsim 100 karakterden uzun olamaz' }
+    // XSS koruması
+    if (/<[^>]*>/.test(value)) return { valid: false, error: 'Geçersiz karakterler' }
+    return { valid: true }
+  }
+
+  const validatePassword = (pwd) => {
+    if (pwd.length < 8) return { valid: false, error: 'Şifre en az 8 karakter olmalı' }
+    return { valid: true }
+  }
+
   const handleRegister = async () => {
     if (!name || !email || !password) return setErrorMsg("Lütfen tüm alanları doldurunuz.");
-    if (password.length < 6) return setErrorMsg("Şifre en az 6 karakter olmalı.");
+
+    const nameValidation = validateName(name)
+    if (!nameValidation.valid) return setErrorMsg(nameValidation.error)
+
+    const passwordValidation = validatePassword(password)
+    if (!passwordValidation.valid) return setErrorMsg(passwordValidation.error)
 
     setErrorMsg('');
     setLoading(true);
@@ -605,7 +675,9 @@ function AuthView() {
 
       if (!publicId) throw new Error("ID oluşturulamadı, lütfen tekrar deneyin.");
 
-      // 2. Supabase User Oluştur
+      if (!publicId) throw new Error("ID oluşturulamadı, lütfen tekrar deneyin.");
+
+      // 2. Supabase Auth ile Kayıt
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
@@ -619,9 +691,9 @@ function AuthView() {
       if (authError) throw authError;
 
       const user = authData.user;
-      if (!user) throw new Error("Kayıt işlemi başarısız.");
+      if (!user) throw new Error("Kayıt oluşturulamadı.");
 
-      // NOT: Profil kaydı artık 'on_auth_user_created' tetikleyicisi ile otomatik oluşturuluyor.
+      // Profil kaydı tetikleyici ile otomatik oluşturulacak
     } catch (e) {
       console.error(e);
       let msg = "Kayıt hatası.";
@@ -645,12 +717,14 @@ function AuthView() {
     } catch (e) {
       console.error(e);
       let msg = "Giriş yapılamadı.";
-      if (e.status === 400) msg = "Hatalı e-posta veya şifre.";
+      if (e.message && e.message.includes('Invalid login credentials')) msg = "Hatalı e-posta veya şifre.";
       setErrorMsg(msg);
     } finally {
       setLoading(false);
     }
   };
+  const [successMsg, setSuccessMsg] = useState('');
+  const [authTab, setAuthTab] = useState('login');
 
   const handleForgotPassword = async () => {
     if (!loginEmail) return setErrorMsg("Sıfırlama linki için lütfen e-posta adresinizi giriniz.");
@@ -658,19 +732,6 @@ function AuthView() {
     setSuccessMsg('');
     setLoading(true);
     try {
-      // Önce kullanıcının veritabanında olup olmadığını kontrol et
-      const { data: dbUser } = await supabase
-        .from('users')
-        .select('id')
-        .eq('email', loginEmail)
-        .maybeSingle();
-
-      if (!dbUser) {
-        setErrorMsg("Bu e-posta adresi ile kayıtlı bir kullanıcı bulunamadı.");
-        setLoading(false);
-        return;
-      }
-
       const { error } = await supabase.auth.resetPasswordForEmail(loginEmail, {
         redirectTo: window.location.origin + '/risale-okuma-takip/',
       });
@@ -678,7 +739,9 @@ function AuthView() {
       setSuccessMsg("Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.");
     } catch (e) {
       console.error(e);
-      setErrorMsg("Bağlantı gönderilemedi.");
+      let msg = "Bağlantı gönderilemedi.";
+      if (e.message.includes('rate limit')) msg = "Çok fazla deneme yaptınız, lütfen bekleyin.";
+      setErrorMsg(msg);
     } finally {
       setLoading(false);
     }
@@ -693,6 +756,7 @@ function AuthView() {
       return () => clearTimeout(timer);
     }
   }, [errorMsg, successMsg]);
+
   const handleLoginSubmit = (e) => {
     e.preventDefault();
     handleLogin();
@@ -703,12 +767,11 @@ function AuthView() {
     handleRegister();
   };
 
-  const [authTab, setAuthTab] = useState('login');
-
   const [legalModal, setLegalModal] = useState({ open: false, title: '', content: '' });
 
   const fetchLegalContent = async (type) => {
-    const file = type === 'terms' ? '/TERMS.md' : '/PRIVACY.md';
+    const baseUrl = import.meta.env.BASE_URL;
+    const file = type === 'terms' ? `${baseUrl}TERMS.md` : `${baseUrl}PRIVACY.md`;
     const title = type === 'terms' ? 'Kullanım Koşulları' : 'Aydınlatma Metni';
     try {
       const response = await fetch(file);
@@ -885,16 +948,16 @@ function AuthView() {
                           </div>
                         </div>
                         <div className="space-y-2">
-                          <Label htmlFor="reg-password">Şifre</Label>
+                          <Label htmlFor="reg-pass">Şifre</Label>
                           <div className="relative">
                             <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                             <Input
-                              id="reg-password"
+                              id="reg-pass"
                               type={showPassword ? "text" : "password"}
+                              placeholder="En az 6 karakter"
                               autoComplete="new-password"
                               required
                               className="pl-10 pr-10 h-11"
-                              placeholder="En az 6 karakter"
                               value={password}
                               onChange={e => setPassword(e.target.value)}
                             />
@@ -907,93 +970,79 @@ function AuthView() {
                             </button>
                           </div>
                         </div>
-                        <Button
-                          type="submit"
-                          className="w-full h-11 text-base font-semibold transition-all hover:scale-[1.01]"
-                          disabled={loading}
-                        >
-                          {loading ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          ) : (
-                            "Kayıt Ol ve Takibe Başla"
-                          )}
-                          {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
-                        </Button>
+                        <div className="pt-2">
+                          <Button
+                            type="submit"
+                            className="w-full h-11 text-base font-semibold shadow-lg shadow-teal-500/10 transition-all hover:scale-[1.01]"
+                            disabled={loading}
+                          >
+                            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Kayıt Ol"}
+                            {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
+                          </Button>
+                        </div>
                       </form>
                     </div>
                   )}
                 </motion.div>
               </CardContent>
             </AnimatePresence>
-
-            <CardFooter className="flex flex-col space-y-4 pb-8 pt-2">
-              <div className="w-full flex items-center justify-center gap-2">
-                <Separator className="flex-1" />
-                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Hizmet ve Gizlilik</span>
-                <Separator className="flex-1" />
-              </div>
-              <p className="text-center text-[10px] text-slate-400 px-6 leading-normal">
-                Kaydolarak{' '}
-                <button
-                  type="button"
-                  onClick={() => fetchLegalContent('terms')}
-                  className="text-primary font-bold hover:underline"
-                >
-                  kullanım koşullarımızı
-                </button>
-                {' '}ve{' '}
-                <button
-                  type="button"
-                  onClick={() => fetchLegalContent('privacy')}
-                  className="text-primary font-bold hover:underline"
-                >
-                  aydınlatma metnini
-                </button>
-                {' '}kabul etmiş sayılırsınız. Verileriniz güvenle saklanmaktadır.
-              </p>
-            </CardFooter>
           </Tabs>
+          <CardFooter className="flex flex-col space-y-4 pb-8 pt-2">
+            <div className="w-full flex items-center justify-center gap-2">
+              <Separator className="flex-1" />
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Hizmet ve Gizlilik</span>
+              <Separator className="flex-1" />
+            </div>
+            <p className="text-center text-[10px] text-slate-400 px-6 leading-normal">
+              Kaydolarak{' '}
+              <button
+                type="button"
+                onClick={() => fetchLegalContent('terms')}
+                className="text-teal-600 font-bold hover:underline"
+              >
+                kullanım koşullarımızı
+              </button>
+              {' '}ve{' '}
+              <button
+                type="button"
+                onClick={() => fetchLegalContent('privacy')}
+                className="text-teal-600 font-bold hover:underline"
+              >
+                aydınlatma metnini
+              </button>
+              {' '}kabul etmiş sayılırsınız. Verileriniz güvenle saklanmaktadır.
+            </p>
+          </CardFooter>
         </Card>
       </motion.div>
 
-      <div className="mt-8 text-slate-400 text-[11px] animate-in fade-in duration-1000 delay-700">
-        &copy; {new Date().getFullYear()} Risale-i Nur Okuma Takip Sistemi
-      </div>
-
-      {/* Legal Modal with Backdrop Blur */}
-      {legalModal.open && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-md bg-slate-900/40 animate-in fade-in duration-300"
-          onClick={() => setLegalModal({ ...legalModal, open: false })}
-        >
-          <Card
-            className="w-full max-w-lg max-h-[80vh] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-300"
-            onClick={e => e.stopPropagation()}
-          >
-            <CardHeader className="flex flex-row items-center justify-between border-b bg-slate-50/50 py-4">
-              <CardTitle className="text-lg font-bold">{legalModal.title}</CardTitle>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-full"
-                onClick={() => setLegalModal({ ...legalModal, open: false })}
-              >
-                <X size={18} />
-              </Button>
-            </CardHeader>
-            <CardContent className="overflow-y-auto p-6 custom-scrollbar text-sm text-slate-600">
-              <div className="prose prose-slate max-w-none text-left prose-headings:font-bold prose-headings:text-slate-900 prose-p:leading-relaxed prose-li:leading-relaxed prose-headings:mb-4 prose-headings:mt-6 first:prose-headings:mt-0">
+      {/* Legal Modal */}
+      <AnimatePresence>
+        {legalModal.open && (
+          <div className="modal-overlay" onClick={() => setLegalModal({ ...legalModal, open: false })}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[80vh] flex flex-col"
+            >
+              <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+                <h3 className="font-bold text-lg text-slate-800">{legalModal.title}</h3>
+                <button onClick={() => setLegalModal({ ...legalModal, open: false })} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+                  <X size={20} className="text-slate-500" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto prose prose-sm max-w-none prose-slate">
                 <ReactMarkdown>{legalModal.content}</ReactMarkdown>
               </div>
-            </CardContent>
-            <CardFooter className="border-t bg-slate-50/50 py-3 flex justify-end">
-              <Button size="sm" onClick={() => setLegalModal({ ...legalModal, open: false })}>
-                Anladım
-              </Button>
-            </CardFooter>
-          </Card>
-        </div>
-      )}
+              <div className="p-4 border-t bg-slate-50 flex justify-end">
+                <Button onClick={() => setLegalModal({ ...legalModal, open: false })}>Kapat</Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1651,7 +1700,7 @@ function FriendDetailView({ friend, onBack }) {
   );
 }
 
-function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, requestNotifPermission, notifPermission, onRefresh, onEditName }) {
+function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, requestNotifPermission, notifPermission }) {
   // Hatim Calculation - Lowest count of all 14 books
   const hatimCount = Math.min(...RISALE_BOOKS.map(title => finishedStats[title] || 0));
 
@@ -1663,14 +1712,9 @@ function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, 
     <div className="space-y-6">
       <div className="flex justify-between items-center px-1">
         <h1 className="text-2xl font-bold text-slate-900">Profil</h1>
-        <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={onRefresh} className="text-teal-600 hover:text-teal-700 hover:bg-teal-50 font-semibold">
-            Yenile
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onLogout} className="text-red-500 hover:text-red-600 hover:bg-red-50 font-semibold">
-            Çıkış Yap
-          </Button>
-        </div>
+        <Button variant="ghost" size="sm" onClick={onLogout} className="text-red-500 hover:text-red-600 hover:bg-red-50 font-semibold">
+          Çıkış Yap
+        </Button>
       </div>
 
       <Card className="p-8 border-none shadow-lg shadow-slate-200/50 bg-gradient-to-br from-white to-slate-50 overflow-hidden relative">
