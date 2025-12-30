@@ -5,7 +5,7 @@ Risale-i Nur medreselerinde günlük kitap okumalarını dijital ortamda takip e
 ## ✨ Özellikler
 
 ### 🔐 Kimlik Doğrulama
-- Firebase Authentication ile e-posta/şifre girişi
+- Supabase Authentication ile e-posta/şifre girişi
 - Her kullanıcı için benzersiz Public ID (örn: `TR1234X5678`)
 - Başka kullanıcıların ID'si ile takip sistemi
 
@@ -84,7 +84,7 @@ Tarayıcıda `http://localhost:5173` adresini açın.
 
 - **Frontend:** React 19 + Vite 7
 - **UI:** shadcn/ui (Radix) + Tailwind CSS
-- **Auth:** Firebase Authentication
+- **Auth:** Supabase Auth
 - **Database:** Supabase (PostgreSQL + Realtime)
 - **Icons:** Lucide React
 - **PWA:** vite-plugin-pwa

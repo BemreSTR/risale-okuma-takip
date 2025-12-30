@@ -1,9 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Home, Calendar, Users, User, Plus, X, ChevronRight, BookOpen, CheckCircle, Trash2, Settings2, Pencil } from 'lucide-react';
 import './index.css';
-import { auth } from './firebase';
 import { supabase } from './supabase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,18 +54,48 @@ export default function App() {
 
   // 1. Auth Listener
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
+    // Check initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        setCurrentUser(session.user);
+        fetchUserProfile(session.user.id);
+      }
+      setLoadingAuth(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      const user = session?.user || null;
       setCurrentUser(user);
       if (user) {
-        const { data } = await supabase.from('users').select('*').eq('id', user.uid).maybeSingle();
-        if (data) setUserProfile(data);
+        await fetchUserProfile(user.id);
       } else {
         setUserProfile(null);
       }
       setLoadingAuth(false);
     });
-    return () => unsub();
+
+    return () => subscription.unsubscribe();
   }, []);
+
+  const fetchUserProfile = async (uid, retry = true) => {
+    try {
+      const { data, error } = await supabase.from('users').select('*').eq('id', uid).maybeSingle();
+
+      if (error) {
+        console.error("Profil çekme hatası:", error);
+        return;
+      }
+
+      if (data) {
+        setUserProfile(data);
+      } else if (retry) {
+        // Yeni kayıtlarda trigger'ın tamamlanması için çok kısa bir süre bekleyip tekrar deneyelim
+        setTimeout(() => fetchUserProfile(uid, false), 1500);
+      }
+    } catch (e) {
+      console.error("Profil fetch hatası:", e);
+    }
+  };
 
   // 1.5 Bildirim Hatırlatıcı (21:00)
   useEffect(() => {
@@ -102,7 +130,7 @@ export default function App() {
   useEffect(() => {
     if (!currentUser) return;
 
-    const userId = currentUser.uid;
+    const userId = currentUser.id;
 
     const fetchData = async () => {
       // Kitaplar
@@ -173,7 +201,7 @@ export default function App() {
 
   // Helpers
   const getTodayStr = () => new Date().toISOString().split('T')[0];
-  const getUserId = () => currentUser?.uid;
+  const getUserId = () => currentUser?.id;
 
   const getBookProgress = (book) => {
     let total = 0;
@@ -309,10 +337,16 @@ export default function App() {
 
   const handleLogout = async () => {
     if (window.confirm("Çıkış yapmak istediğine emin misin?")) {
-      await signOut(auth);
+      // State'i hemen temizle (anında feedback için)
       setMyBooks([]);
       setLogs({});
       setFinishedStats({});
+      setUserProfile(null);
+
+      // signOut işlemini arka planda çalıştır
+      supabase.auth.signOut().catch(err => {
+        console.error("Çıkış hatası:", err);
+      });
     }
   };
 
@@ -322,10 +356,15 @@ export default function App() {
   const handleUpdateName = async () => {
     if (!newNameInput.trim()) return;
     try {
-      const uid = auth.currentUser.uid;
-      await updateProfile(auth.currentUser, { displayName: newNameInput });
-      const { error } = await supabase.from('users').update({ name: newNameInput }).eq('id', uid);
-      if (error) throw error;
+      const uid = currentUser.id;
+      const { error: authError } = await supabase.auth.updateUser({
+        data: { name: newNameInput }
+      });
+      if (authError) throw authError;
+
+      const { error: dbError } = await supabase.from('users').update({ name: newNameInput }).eq('id', uid);
+      if (dbError) throw dbError;
+
       setUserProfile(prev => ({ ...prev, name: newNameInput }));
       setEditNameModal(false);
     } catch (e) {
@@ -356,7 +395,7 @@ export default function App() {
           />
         )}
         {activeTab === 'calendar' && <CalendarView logs={logs} />}
-        {activeTab === 'friends' && <FriendsView userId={currentUser.uid} />}
+        {activeTab === 'friends' && <FriendsView userId={currentUser.id} />}
         {activeTab === 'profile' && (
           showHatimler ? (
             <HatimlerView finishedStats={finishedStats} onBack={() => setShowHatimler(false)} onEdit={async (book) => {
@@ -368,15 +407,16 @@ export default function App() {
             <ProfileView
               finishedStats={finishedStats}
               onShowHatimler={() => setShowHatimler(true)}
-              publicId={userProfile?.public_id || '...'}
-              name={userProfile?.name || 'Misafir'}
+              publicId={userProfile?.public_id || currentUser?.user_metadata?.public_id || 'TR....'}
+              name={userProfile?.name || currentUser?.user_metadata?.name || 'Yükleniyor...'}
               onLogout={handleLogout}
               requestNotifPermission={requestNotifPermission}
               notifPermission={notifPermission}
               onEditName={() => {
-                setNewNameInput(userProfile?.name || '');
+                setNewNameInput(userProfile?.name || currentUser?.user_metadata?.name || '');
                 setEditNameModal(true);
               }}
+              onRefresh={() => fetchUserProfile(currentUser.id)}
             />
           )
         )}
@@ -496,7 +536,7 @@ export default function App() {
               const count = parseInt(hatimCountInput);
               if (isNaN(count) || count < 0) return;
               try {
-                const uid = getUserId();
+                const uid = currentUser.id;
                 // Find existing stat
                 const { data: existing } = await supabase.from('book_stats').select('*').eq('user_id', uid).eq('book_title', selectedHatimBook).maybeSingle();
                 if (existing) {
@@ -565,22 +605,27 @@ function AuthView() {
 
       if (!publicId) throw new Error("ID oluşturulamadı, lütfen tekrar deneyin.");
 
-      // 2. Firebase User Oluştur
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
-      await updateProfile(user, { displayName: name });
-
-      // 3. Supabase Kaydı
-      await supabase.from('users').insert({
-        id: user.uid,
-        name: name,
-        email: email,
-        public_id: publicId,
+      // 2. Supabase User Oluştur
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            name: name,
+            public_id: publicId
+          }
+        }
       });
+      if (authError) throw authError;
+
+      const user = authData.user;
+      if (!user) throw new Error("Kayıt işlemi başarısız.");
+
+      // NOT: Profil kaydı artık 'on_auth_user_created' tetikleyicisi ile otomatik oluşturuluyor.
     } catch (e) {
       console.error(e);
       let msg = "Kayıt hatası.";
-      if (e.code === 'auth/email-already-in-use') msg = "Bu e-posta zaten kullanımda.";
+      if (e.message && e.message.includes('already registered')) msg = "Bu e-posta zaten kullanımda.";
       setErrorMsg(msg);
     } finally {
       setLoading(false);
@@ -592,11 +637,15 @@ function AuthView() {
     setErrorMsg('');
     setLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      const { error } = await supabase.auth.signInWithPassword({
+        email: loginEmail,
+        password: loginPassword,
+      });
+      if (error) throw error;
     } catch (e) {
       console.error(e);
       let msg = "Giriş yapılamadı.";
-      if (e.code === 'auth/invalid-credential') msg = "Hatalı e-posta veya şifre.";
+      if (e.status === 400) msg = "Hatalı e-posta veya şifre.";
       setErrorMsg(msg);
     } finally {
       setLoading(false);
@@ -610,25 +659,26 @@ function AuthView() {
     setLoading(true);
     try {
       // Önce kullanıcının veritabanında olup olmadığını kontrol et
-      const { data, error: checkError } = await supabase
+      const { data: dbUser } = await supabase
         .from('users')
         .select('id')
         .eq('email', loginEmail)
         .maybeSingle();
 
-      if (!data) {
+      if (!dbUser) {
         setErrorMsg("Bu e-posta adresi ile kayıtlı bir kullanıcı bulunamadı.");
         setLoading(false);
         return;
       }
 
-      await sendPasswordResetEmail(auth, loginEmail);
+      const { error } = await supabase.auth.resetPasswordForEmail(loginEmail, {
+        redirectTo: window.location.origin + '/risale-okuma-takip/',
+      });
+      if (error) throw error;
       setSuccessMsg("Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.");
     } catch (e) {
       console.error(e);
-      let msg = "Bağlantı gönderilemedi.";
-      if (e.code === 'auth/user-not-found') msg = "Bu e-posta adresi ile kayıtlı kullanıcı bulunamadı.";
-      setErrorMsg(msg);
+      setErrorMsg("Bağlantı gönderilemedi.");
     } finally {
       setLoading(false);
     }
@@ -1601,7 +1651,7 @@ function FriendDetailView({ friend, onBack }) {
   );
 }
 
-function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, requestNotifPermission, notifPermission }) {
+function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, requestNotifPermission, notifPermission, onRefresh, onEditName }) {
   // Hatim Calculation - Lowest count of all 14 books
   const hatimCount = Math.min(...RISALE_BOOKS.map(title => finishedStats[title] || 0));
 
@@ -1613,9 +1663,14 @@ function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, 
     <div className="space-y-6">
       <div className="flex justify-between items-center px-1">
         <h1 className="text-2xl font-bold text-slate-900">Profil</h1>
-        <Button variant="ghost" size="sm" onClick={onLogout} className="text-red-500 hover:text-red-600 hover:bg-red-50 font-semibold">
-          Çıkış Yap
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" size="sm" onClick={onRefresh} className="text-teal-600 hover:text-teal-700 hover:bg-teal-50 font-semibold">
+            Yenile
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onLogout} className="text-red-500 hover:text-red-600 hover:bg-red-50 font-semibold">
+            Çıkış Yap
+          </Button>
+        </div>
       </div>
 
       <Card className="p-8 border-none shadow-lg shadow-slate-200/50 bg-gradient-to-br from-white to-slate-50 overflow-hidden relative">

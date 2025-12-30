@@ -15,7 +15,7 @@ Verileriniz şu amaçlarla işlenir:
 * Hatırlatıcı bildirimler göndermek (izniniz dahilinde).
 
 ## 3. Verilerin Saklanması ve Aktarımı
-* Verileriniz, güvenli bulut altyapıları olan **Firebase (Google)** ve **Supabase** üzerinde şifrelenmiş olarak saklanmaktadır.
+* Verileriniz, güvenli bulut altyapısı olan **Supabase** üzerinde şifrelenmiş olarak saklanmaktadır.
 * Verileriniz, yasaların öngördüğü durumlar haricinde üçüncü şahıslara veya ticari kuruluşlara satılmaz veya devredilmez.
 * Grup özelliği kullanıldığında, adınız ve kullanıcı ID'niz grubun diğer üyeleri tarafından görülebilir.
 
