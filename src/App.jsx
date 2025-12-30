@@ -410,7 +410,28 @@ export default function App() {
     }
   };
 
-  if (loadingAuth) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Yükleniyor...</div>;
+  if (loadingAuth) return (
+    <div style={{
+      height: '100vh',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
+      gap: '16px'
+    }}>
+      <div style={{
+        width: '48px',
+        height: '48px',
+        border: '4px solid #e2e8f0',
+        borderTop: '4px solid #0d9488',
+        borderRadius: '50%',
+        animation: 'spin 1s linear infinite'
+      }} />
+      <p style={{ color: '#64748b', fontSize: '14px', fontWeight: 500 }}>Yükleniyor...</p>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
 
   if (!currentUser) {
     return <AuthView />;
