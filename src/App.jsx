@@ -374,7 +374,18 @@ export default function App() {
       setShowPasswordReset(false);
       setNewPassword('');
     } catch (error) {
-      alert("Şifre güncellenirken bir hata oluştu.");
+      // Supabase hata mesajlarını kullanıcı dostu hale getir
+      let message = "Şifre güncellenirken bir hata oluştu.";
+
+      if (error.message) {
+        if (error.message.includes('same_password') || error.status === 422) {
+          message = "Yeni şifreniz mevcut şifrenizden farklı olmalıdır.";
+        } else if (error.message.includes('weak_password')) {
+          message = "Şifre çok zayıf. Daha güçlü bir şifre seçin.";
+        }
+      }
+
+      alert(message);
     }
   };
 
