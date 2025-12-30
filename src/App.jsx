@@ -65,13 +65,11 @@ export default function App() {
 
       // Hash kontrolü (Fallback): Supabase bazen event fırlatmadan önce redirect edebilir
       if (window.location.hash && window.location.hash.includes('type=recovery')) {
-        console.log("Recovery hash detected!");
         setShowPasswordReset(true);
       }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log("Auth Event:", event);
       if (event === 'PASSWORD_RECOVERY') {
         setShowPasswordReset(true);
       }
@@ -289,7 +287,6 @@ export default function App() {
 
       setReadModalOpen(false);
     } catch (error) {
-      console.error("Okuma hatası:", error);
       alert("Hata oluştu.");
     }
   };
@@ -317,7 +314,7 @@ export default function App() {
       }).eq('id', book.id);
 
     } catch (error) {
-      console.error("Bitirme hatası:", error);
+      alert("Kitap bitirilemedi.");
     }
   };
 
@@ -328,9 +325,8 @@ export default function App() {
       return;
     }
     const uid = getUserId();
-    console.log("handleAddBook Debug:", { uid, title }); // Debug log
     if (!uid) {
-      console.error("Hata: Kullanıcı oturumu bulunamadı!");
+      alert("Oturum hatası. Lütfen tekrar giriş yapın.");
       return;
     }
 
@@ -343,11 +339,8 @@ export default function App() {
       }).select();
 
       if (error) {
-        console.error("Supabase Insert Error:", error);
         throw error;
       }
-
-      console.log("Kitap eklendi:", data);
 
       // UI'ı anında güncelle
       if (data && data.length > 0) {
@@ -359,8 +352,7 @@ export default function App() {
 
       setAddBookModalOpen(false);
     } catch (error) {
-      console.error("Ekleme hatası (catch):", error);
-      alert("Kitap eklenirken bir hata oluştu: " + error.message);
+      alert("Kitap eklenirken bir hata oluştu.");
     }
   };
 
@@ -399,7 +391,6 @@ export default function App() {
       setUserProfile(prev => ({ ...prev, name: newNameInput }));
       setEditNameModal(false);
     } catch (e) {
-      console.error(e);
       alert("İsim güncellenirken hata oluştu.");
     }
   };
@@ -418,8 +409,7 @@ export default function App() {
       setShowPasswordReset(false);
       setNewPassword('');
     } catch (error) {
-      console.error("Şifre güncelleme hatası:", error);
-      alert("Şifre güncellenirken bir hata oluştu: " + error.message);
+      alert("Şifre güncellenirken bir hata oluştu.");
     }
   };
 
@@ -560,6 +550,35 @@ export default function App() {
         </div>
       )}
 
+      {/* Şifre Sıfırlama Modalı */}
+      {showPasswordReset && (
+        <div className="modal-overlay" onClick={() => setShowPasswordReset(false)}>
+          <Card className="w-[90%] max-w-sm p-6 animate-in slide-in-from-bottom-5 duration-300" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold">Yeni Şifre Belirle</h3>
+              <button onClick={() => setShowPasswordReset(false)} className="text-slate-400"><X size={20} /></button>
+            </div>
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="new-password">Yeni Şifre</Label>
+                <Input
+                  id="new-password"
+                  type="password"
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  placeholder="En az 6 karakter"
+                  autoFocus
+                  className="text-left h-11"
+                />
+              </div>
+              <Button className="w-full h-11 shadow-lg shadow-teal-500/10" onClick={handleUpdatePassword}>
+                Şifreyi Güncelle
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
       {/* Hatim Düzenleme Modalı */}
       {editHatimModal && (
         <div className="modal-overlay" onClick={() => setEditHatimModal(false)}>
@@ -599,7 +618,7 @@ export default function App() {
                 }
                 setEditHatimModal(false);
               } catch (error) {
-                console.error("Hatim güncelleme hatası:", error);
+                alert("Hatim güncellenirken hata oluştu.");
               }
             }}>Kaydet</button>
           </div>
@@ -695,7 +714,6 @@ function AuthView() {
 
       // Profil kaydı tetikleyici ile otomatik oluşturulacak
     } catch (e) {
-      console.error(e);
       let msg = "Kayıt hatası.";
       if (e.message && e.message.includes('already registered')) msg = "Bu e-posta zaten kullanımda.";
       setErrorMsg(msg);
@@ -715,7 +733,6 @@ function AuthView() {
       });
       if (error) throw error;
     } catch (e) {
-      console.error(e);
       let msg = "Giriş yapılamadı.";
       if (e.message && e.message.includes('Invalid login credentials')) msg = "Hatalı e-posta veya şifre.";
       setErrorMsg(msg);
@@ -738,9 +755,8 @@ function AuthView() {
       if (error) throw error;
       setSuccessMsg("Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.");
     } catch (e) {
-      console.error(e);
       let msg = "Bağlantı gönderilemedi.";
-      if (e.message.includes('rate limit')) msg = "Çok fazla deneme yaptınız, lütfen bekleyin.";
+      if (e.message && e.message.includes('rate limit')) msg = "Çok fazla deneme yaptınız, lütfen bekleyin.";
       setErrorMsg(msg);
     } finally {
       setLoading(false);
@@ -778,7 +794,6 @@ function AuthView() {
       const text = await response.text();
       setLegalModal({ open: true, title, content: text });
     } catch (error) {
-      console.error('Error fetching legal content:', error);
       setLegalModal({ open: true, title, content: 'İçerik yüklenirken bir hata oluştu.' });
     }
   };
@@ -1343,7 +1358,9 @@ function FriendsView({ userId }) {
       });
       setGroupNameInput('');
       setShowAddGroup(false);
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      alert("Grup eklenirken hata oluştu.");
+    }
   };
 
   const handleAddMember = async () => {
@@ -1375,8 +1392,7 @@ function FriendsView({ userId }) {
       setMemberIdInput('');
       setActiveGroupId(null);
     } catch (e) {
-      console.error(e);
-      alert("Hata oluştu.");
+      alert("Üye eklenirken hata oluştu.");
     }
   };
 
@@ -1393,8 +1409,7 @@ function FriendsView({ userId }) {
       setEditingGroupId(null);
       setEditGroupNameInput('');
     } catch (e) {
-      console.error(e);
-      alert("Düzenleme hatası.");
+      alert("Grup düzenlenirken hata oluştu.");
     }
   };
 
@@ -1429,8 +1444,7 @@ function FriendsView({ userId }) {
 
       setMovingMember(null);
     } catch (e) {
-      console.error(e);
-      alert("Taşıma hatası.");
+      alert("Üye taşınırken hata oluştu.");
     }
   };
 
