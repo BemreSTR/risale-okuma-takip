@@ -3,7 +3,7 @@ import { Home, Calendar, Users, User, Plus, X, ChevronRight, BookOpen, CheckCirc
 import './index.css';
 import { auth } from './firebase';
 import { supabase } from './supabase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { Mail, Lock, User as UserIcon, ArrowRight, Loader2, Info, Eye, EyeOff, Bell, BellOff } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // Risale-i Nur Külliyatı (14 Temel Kitap)
 const RISALE_BOOKS = [
@@ -519,6 +520,7 @@ export default function App() {
 function AuthView() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
 
   // Register Form
   const [name, setName] = useState('');
@@ -600,6 +602,47 @@ function AuthView() {
       setLoading(false);
     }
   };
+
+  const handleForgotPassword = async () => {
+    if (!loginEmail) return setErrorMsg("Sıfırlama linki için lütfen e-posta adresinizi giriniz.");
+    setErrorMsg('');
+    setSuccessMsg('');
+    setLoading(true);
+    try {
+      // Önce kullanıcının veritabanında olup olmadığını kontrol et
+      const { data, error: checkError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', loginEmail)
+        .maybeSingle();
+
+      if (!data) {
+        setErrorMsg("Bu e-posta adresi ile kayıtlı bir kullanıcı bulunamadı.");
+        setLoading(false);
+        return;
+      }
+
+      await sendPasswordResetEmail(auth, loginEmail);
+      setSuccessMsg("Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.");
+    } catch (e) {
+      console.error(e);
+      let msg = "Bağlantı gönderilemedi.";
+      if (e.code === 'auth/user-not-found') msg = "Bu e-posta adresi ile kayıtlı kullanıcı bulunamadı.";
+      setErrorMsg(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (errorMsg || successMsg) {
+      const timer = setTimeout(() => {
+        setErrorMsg('');
+        setSuccessMsg('');
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [errorMsg, successMsg]);
   const handleLoginSubmit = (e) => {
     e.preventDefault();
     handleLogin();
@@ -609,6 +652,8 @@ function AuthView() {
     e.preventDefault();
     handleRegister();
   };
+
+  const [authTab, setAuthTab] = useState('login');
 
   const [legalModal, setLegalModal] = useState({ open: false, title: '', content: '' });
 
@@ -627,6 +672,33 @@ function AuthView() {
 
   return (
     <div className="min-h-screen w-full bg-slate-50 flex flex-col items-center justify-center p-4">
+      <AnimatePresence>
+        {(errorMsg || successMsg) && (
+          <motion.div
+            initial={{ opacity: 0, x: "-50%", y: -50, scale: 0.95 }}
+            animate={{ opacity: 1, x: "-50%", y: 0, scale: 1 }}
+            exit={{ opacity: 0, x: "-50%", y: -20, scale: 0.95 }}
+            className="fixed top-6 left-1/2 z-[200] w-[calc(100%-2rem)] max-w-sm cursor-pointer"
+            onClick={() => { setErrorMsg(''); setSuccessMsg(''); }}
+          >
+            <Alert
+              variant={errorMsg ? "destructive" : "default"}
+              className={`shadow-2xl border-2 ${successMsg ? "border-green-500 bg-white/95 backdrop-blur text-green-700" : "bg-white/95 backdrop-blur"}`}
+            >
+              <div className="flex items-center gap-3">
+                {errorMsg ? <Info className="h-5 w-5" /> : <CheckCircle className="h-5 w-5 text-green-600" />}
+                <div className="flex-1">
+                  <AlertTitle className="font-bold text-base">{errorMsg ? "Hata" : "Başarılı"}</AlertTitle>
+                  <AlertDescription className="font-medium">
+                    {errorMsg || successMsg}
+                  </AlertDescription>
+                </div>
+              </div>
+            </Alert>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Logo & Header */}
       <div className="mb-8 text-center space-y-2 animate-in fade-in slide-in-from-bottom-4 duration-500">
         <div className="w-16 h-16 bg-primary rounded-2xl flex items-center justify-center text-white mx-auto shadow-lg shadow-primary/20">
@@ -638,180 +710,201 @@ function AuthView() {
         </div>
       </div>
 
-      <Card className="w-full max-w-md shadow-xl border-none animate-in fade-in zoom-in-95 duration-500 delay-200">
-        <Tabs defaultValue="login" className="w-full">
-          <CardHeader className="pb-2">
-            <TabsList className="grid w-full grid-cols-2 h-12">
-              <TabsTrigger value="login" className="text-sm font-semibold">Giriş Yap</TabsTrigger>
-              <TabsTrigger value="register" className="text-sm font-semibold">Kayıt Ol</TabsTrigger>
-            </TabsList>
-          </CardHeader>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.5 }}
+        className="w-full max-w-md"
+      >
+        <Card className="w-full shadow-xl border-none overflow-hidden">
+          <Tabs value={authTab} onValueChange={setAuthTab} className="w-full">
+            <CardHeader className="pb-2">
+              <TabsList className="grid w-full grid-cols-2 h-12">
+                <TabsTrigger value="login" className="text-sm font-semibold">Giriş Yap</TabsTrigger>
+                <TabsTrigger value="register" className="text-sm font-semibold">Kayıt Ol</TabsTrigger>
+              </TabsList>
+            </CardHeader>
 
-          <CardContent className="pt-4 px-8">
-            {errorMsg && (
-              <Alert variant="destructive" className="mb-6 animate-in slide-in-from-top-2 duration-300">
-                <Info className="h-4 w-4" />
-                <AlertTitle>Hata</AlertTitle>
-                <AlertDescription>{errorMsg}</AlertDescription>
-              </Alert>
-            )}
-
-            <TabsContent value="login" className="space-y-4 m-0">
-              <form onSubmit={handleLoginSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="login-email">E-Posta</Label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id="login-email"
-                      placeholder="ad@ornek.com"
-                      type="email"
-                      autoComplete="email"
-                      required
-                      className="pl-10 h-11"
-                      value={loginEmail}
-                      onChange={e => setLoginEmail(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="login-password">Şifre</Label>
-                  <div className="relative">
-                    <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id="login-password"
-                      type={showLoginPassword ? "text" : "password"}
-                      autoComplete="current-password"
-                      required
-                      className="pl-10 pr-10 h-11"
-                      placeholder="••••••"
-                      value={loginPassword}
-                      onChange={e => setLoginPassword(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowLoginPassword(!showLoginPassword)}
-                      className="absolute right-3 top-3 text-muted-foreground hover:text-foreground"
-                    >
-                      {showLoginPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
-                  </div>
-                </div>
-                <Button
-                  type="submit"
-                  className="w-full h-11 text-base font-semibold transition-all hover:scale-[1.01]"
-                  disabled={loading}
+            <AnimatePresence mode="wait">
+              <CardContent className="pt-4 px-8 min-h-[360px] relative">
+                <motion.div
+                  key={authTab}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3, ease: "easeInOut" }}
+                  className="absolute inset-0 px-8"
                 >
-                  {loading ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  {authTab === 'login' ? (
+                    <div className="space-y-4 m-0">
+                      <form onSubmit={handleLoginSubmit} className="space-y-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="login-email">E-Posta</Label>
+                          <div className="relative">
+                            <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                            <Input
+                              id="login-email"
+                              placeholder="ad@ornek.com"
+                              type="email"
+                              autoComplete="email"
+                              required
+                              className="pl-10 h-11"
+                              value={loginEmail}
+                              onChange={e => setLoginEmail(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="login-password">Şifre</Label>
+                          <div className="relative">
+                            <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                            <Input
+                              id="login-password"
+                              type={showLoginPassword ? "text" : "password"}
+                              autoComplete="current-password"
+                              required
+                              className="pl-10 pr-10 h-11"
+                              placeholder="••••••"
+                              value={loginPassword}
+                              onChange={e => setLoginPassword(e.target.value)}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowLoginPassword(!showLoginPassword)}
+                              className="absolute right-3 top-3 text-muted-foreground hover:text-foreground"
+                            >
+                              {showLoginPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                            </button>
+                          </div>
+                          <div className="flex justify-end pt-1">
+                            <button
+                              type="button"
+                              onClick={handleForgotPassword}
+                              className="text-xs font-semibold text-primary hover:underline transition-all"
+                            >
+                              Şifremi unuttum
+                            </button>
+                          </div>
+                        </div>
+                        <Button
+                          type="submit"
+                          className="w-full h-11 text-base font-semibold transition-all hover:scale-[1.01]"
+                          disabled={loading}
+                        >
+                          {loading ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            "Giriş Yap"
+                          )}
+                          {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
+                        </Button>
+                      </form>
+                    </div>
                   ) : (
-                    "Giriş Yap"
+                    <div className="space-y-4 m-0">
+                      <form onSubmit={handleRegisterSubmit} className="space-y-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="reg-name">Ad Soyad</Label>
+                          <div className="relative">
+                            <UserIcon className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                            <Input
+                              id="reg-name"
+                              placeholder="Ahmet Yılmaz"
+                              autoComplete="name"
+                              required
+                              className="pl-10 h-11"
+                              value={name}
+                              onChange={e => setName(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="reg-email">E-Posta</Label>
+                          <div className="relative">
+                            <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                            <Input
+                              id="reg-email"
+                              placeholder="ad@ornek.com"
+                              type="email"
+                              autoComplete="email"
+                              required
+                              className="pl-10 h-11"
+                              value={email}
+                              onChange={e => setEmail(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="reg-password">Şifre</Label>
+                          <div className="relative">
+                            <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                            <Input
+                              id="reg-password"
+                              type={showPassword ? "text" : "password"}
+                              autoComplete="new-password"
+                              required
+                              className="pl-10 pr-10 h-11"
+                              placeholder="En az 6 karakter"
+                              value={password}
+                              onChange={e => setPassword(e.target.value)}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(!showPassword)}
+                              className="absolute right-3 top-3 text-muted-foreground hover:text-foreground"
+                            >
+                              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                            </button>
+                          </div>
+                        </div>
+                        <Button
+                          type="submit"
+                          className="w-full h-11 text-base font-semibold transition-all hover:scale-[1.01]"
+                          disabled={loading}
+                        >
+                          {loading ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            "Kayıt Ol ve Takibe Başla"
+                          )}
+                          {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
+                        </Button>
+                      </form>
+                    </div>
                   )}
-                  {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
-                </Button>
-              </form>
-            </TabsContent>
+                </motion.div>
+              </CardContent>
+            </AnimatePresence>
 
-            <TabsContent value="register" className="space-y-4 m-0">
-              <form onSubmit={handleRegisterSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="reg-name">Ad Soyad</Label>
-                  <div className="relative">
-                    <UserIcon className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id="reg-name"
-                      placeholder="Ahmet Yılmaz"
-                      autoComplete="name"
-                      required
-                      className="pl-10 h-11"
-                      value={name}
-                      onChange={e => setName(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="reg-email">E-Posta</Label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id="reg-email"
-                      placeholder="ad@ornek.com"
-                      type="email"
-                      autoComplete="email"
-                      required
-                      className="pl-10 h-11"
-                      value={email}
-                      onChange={e => setEmail(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="reg-password">Şifre</Label>
-                  <div className="relative">
-                    <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id="reg-password"
-                      type={showPassword ? "text" : "password"}
-                      autoComplete="new-password"
-                      required
-                      className="pl-10 pr-10 h-11"
-                      placeholder="En az 6 karakter"
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-3 text-muted-foreground hover:text-foreground"
-                    >
-                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
-                  </div>
-                </div>
-                <Button
-                  type="submit"
-                  className="w-full h-11 text-base font-semibold transition-all hover:scale-[1.01]"
-                  disabled={loading}
+            <CardFooter className="flex flex-col space-y-4 pb-8 pt-2">
+              <div className="w-full flex items-center justify-center gap-2">
+                <Separator className="flex-1" />
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Hizmet ve Gizlilik</span>
+                <Separator className="flex-1" />
+              </div>
+              <p className="text-center text-[10px] text-slate-400 px-6 leading-normal">
+                Kaydolarak{' '}
+                <button
+                  type="button"
+                  onClick={() => fetchLegalContent('terms')}
+                  className="text-primary font-bold hover:underline"
                 >
-                  {loading ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    "Kayıt Ol ve Takibe Başla"
-                  )}
-                  {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
-                </Button>
-              </form>
-            </TabsContent>
-          </CardContent>
-
-          <CardFooter className="flex flex-col space-y-4 pb-8 pt-2">
-            <div className="w-full flex items-center justify-center gap-2">
-              <Separator className="flex-1" />
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Hizmet ve Gizlilik</span>
-              <Separator className="flex-1" />
-            </div>
-            <p className="text-center text-[10px] text-slate-400 px-6 leading-normal">
-              Kaydolarak{' '}
-              <button
-                type="button"
-                onClick={() => fetchLegalContent('terms')}
-                className="text-primary font-bold hover:underline"
-              >
-                kullanım koşullarımızı
-              </button>
-              {' '}ve{' '}
-              <button
-                type="button"
-                onClick={() => fetchLegalContent('privacy')}
-                className="text-primary font-bold hover:underline"
-              >
-                aydınlatma metnini
-              </button>
-              {' '}kabul etmiş sayılırsınız. Verileriniz güvenle saklanmaktadır.
-            </p>
-          </CardFooter>
-        </Tabs>
-      </Card>
+                  kullanım koşullarımızı
+                </button>
+                {' '}ve{' '}
+                <button
+                  type="button"
+                  onClick={() => fetchLegalContent('privacy')}
+                  className="text-primary font-bold hover:underline"
+                >
+                  aydınlatma metnini
+                </button>
+                {' '}kabul etmiş sayılırsınız. Verileriniz güvenle saklanmaktadır.
+              </p>
+            </CardFooter>
+          </Tabs>
+        </Card>
+      </motion.div>
 
       <div className="mt-8 text-slate-400 text-[11px] animate-in fade-in duration-1000 delay-700">
         &copy; {new Date().getFullYear()} Risale-i Nur Okuma Takip Sistemi
