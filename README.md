@@ -1,16 +1,120 @@
-# React + Vite
+# 📖 Risale-i Nur Okuma Takip Sistemi
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Risale-i Nur medreselerinde günlük kitap okumalarını dijital ortamda takip etmek için geliştirilmiş mobil uyumlu web uygulaması.
 
-Currently, two official plugins are available:
+## ✨ Özellikler
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+### 🔐 Kimlik Doğrulama
+- Firebase Authentication ile e-posta/şifre girişi
+- Her kullanıcı için benzersiz Public ID (örn: `TR1234X5678`)
+- Başka kullanıcıların ID'si ile takip sistemi
 
-## React Compiler
+### 📚 Okuma Takibi
+- **14 Temel Risale-i Nur Kitabı** desteği
+- Günlük sayfa ekleme
+- Kitap başına ilerleme takibi
+- "Kitabı Bitirdim" ile hatim sayacı
+- Manuel hatim düzenleme
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 📅 Takvim Görünümü
+- Aylık takvim gösterimi
+- Her gün için toplam okunan sayfa
+- Güne tıklayınca detaylı okuma kaydı
+- Renk skalası (okunan sayfa sayısına göre)
 
-## Expanding the ESLint configuration
+### 👥 Takip Sistemi (Medrese Usulü)
+- Grup oluşturma (örn: "Liseli Talebeler")
+- Public ID ile talebe ekleme
+- Talebe okumalarını görüntüleme
+- Gruplar arası üye taşıma
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### 👤 Profil
+- Kullanıcı adı gösterimi
+- Paylaşılabilir Kullanıcı ID
+- Toplam hatim sayısı
+- Karanlık mod
+- 21:00 okuma hatırlatıcı bildirimi
+
+### 📱 PWA Desteği
+- Ana ekrana yükleme
+- İkon ile başlatma
+- Offline çalışma desteği (yakında)
+
+---
+
+## 🛠️ Kurulum
+
+### Gereksinimler
+- Node.js 18+
+- pnpm
+
+### Adımlar
+
+```bash
+# Projeyi klonla
+git clone <repo-url>
+cd okuma-takip
+
+# Bağımlılıkları yükle
+pnpm install
+
+# Çalıştır
+pnpm dev
+```
+
+Tarayıcıda `http://localhost:5173` adresini açın.
+
+---
+
+## 🗄️ Veritabanı (Supabase)
+
+### Tablolar
+
+| Tablo | Açıklama |
+|-------|----------|
+| `users` | Kullanıcı bilgileri, public_id |
+| `books` | Aktif okunan kitaplar |
+| `reading_logs` | Günlük okuma kayıtları |
+| `book_stats` | Hatim sayaçları |
+| `following_groups` | Grup ve üyeler (JSONB) |
+
+---
+
+## 🎨 Teknolojiler
+
+- **Frontend:** React 19 + Vite 7
+- **UI:** shadcn/ui (Radix) + Tailwind CSS
+- **Auth:** Firebase Authentication
+- **Database:** Supabase (PostgreSQL + Realtime)
+- **Icons:** Lucide React
+- **PWA:** vite-plugin-pwa
+
+---
+
+## 📱 Ekran Görüntüleri
+
+### Ana Sayfa
+Kitaplarınızı listeleyin, sayfa ekleyin ve bitirdiğinizde işaretleyin.
+
+### Takvim
+Geçmiş okumalarınızı günlük olarak görün.
+
+### Arkadaşlar
+Talebelerinizi gruplara ayırarak okumalarını takip edin.
+
+### Profil
+Hatimlerinizi görün ve ayarları yönetin.
+
+---
+
+## 📄 Lisans
+
+Bu proje açık kaynak kodludur.
+
+---
+
+## 💬 Vecize
+
+*"İman hakikati öyle bir çekirdektir ki, eğer tecessüm etse, bir cennet-i hususiye ondan çıkar, o çekirdeğin şecere-i tûbası olur."*
+
+— **Bediüzzaman Said Nursî**

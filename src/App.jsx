@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { Mail, Lock, User as UserIcon, ArrowRight, Loader2, Info, Eye, EyeOff, Bell, BellOff } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 // Risale-i Nur Külliyatı (14 Temel Kitap)
 const RISALE_BOOKS = [
@@ -314,6 +315,24 @@ export default function App() {
     }
   };
 
+  const [editNameModal, setEditNameModal] = useState(false);
+  const [newNameInput, setNewNameInput] = useState('');
+
+  const handleUpdateName = async () => {
+    if (!newNameInput.trim()) return;
+    try {
+      const uid = auth.currentUser.uid;
+      await updateProfile(auth.currentUser, { displayName: newNameInput });
+      const { error } = await supabase.from('users').update({ name: newNameInput }).eq('id', uid);
+      if (error) throw error;
+      setUserProfile(prev => ({ ...prev, name: newNameInput }));
+      setEditNameModal(false);
+    } catch (e) {
+      console.error(e);
+      alert("İsim güncellenirken hata oluştu.");
+    }
+  };
+
   if (loadingAuth) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Yükleniyor...</div>;
 
   if (!currentUser) {
@@ -353,12 +372,42 @@ export default function App() {
               onLogout={handleLogout}
               requestNotifPermission={requestNotifPermission}
               notifPermission={notifPermission}
+              onEditName={() => {
+                setNewNameInput(userProfile?.name || '');
+                setEditNameModal(true);
+              }}
             />
           )
         )}
       </div>
 
       <NavBar activeTab={activeTab} setActiveTab={setActiveTab} />
+
+      {/* İsim Düzenleme Modalı */}
+      {editNameModal && (
+        <div className="modal-overlay" onClick={() => setEditNameModal(false)}>
+          <Card className="w-[90%] max-w-sm p-6 animate-in slide-in-from-bottom-5 duration-300" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold">İsmini Düzenle</h3>
+              <button onClick={() => setEditNameModal(false)} className="text-slate-400"><X size={20} /></button>
+            </div>
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="new-name">Yeni Ad Soyad</Label>
+                <Input
+                  id="new-name"
+                  value={newNameInput}
+                  onChange={e => setNewNameInput(e.target.value)}
+                  placeholder="Ad Soyad"
+                  autoFocus
+                  className="text-left h-11"
+                />
+              </div>
+              <Button className="w-full h-11 shadow-lg shadow-teal-500/10" onClick={handleUpdateName}>Güncelle</Button>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {/* Okuma Ekleme Modalı */}
       {readModalOpen && (
@@ -561,6 +610,21 @@ function AuthView() {
     handleRegister();
   };
 
+  const [legalModal, setLegalModal] = useState({ open: false, title: '', content: '' });
+
+  const fetchLegalContent = async (type) => {
+    const file = type === 'terms' ? '/TERMS.md' : '/PRIVACY.md';
+    const title = type === 'terms' ? 'Kullanım Koşulları' : 'Aydınlatma Metni';
+    try {
+      const response = await fetch(file);
+      const text = await response.text();
+      setLegalModal({ open: true, title, content: text });
+    } catch (error) {
+      console.error('Error fetching legal content:', error);
+      setLegalModal({ open: true, title, content: 'İçerik yüklenirken bir hata oluştu.' });
+    }
+  };
+
   return (
     <div className="min-h-screen w-full bg-slate-50 flex flex-col items-center justify-center p-4">
       {/* Logo & Header */}
@@ -727,8 +791,23 @@ function AuthView() {
               <Separator className="flex-1" />
             </div>
             <p className="text-center text-[10px] text-slate-400 px-6 leading-normal">
-              Kaydolarak kullanım koşullarımızı ve aydınlatma metnini kabul etmiş sayılırsınız.
-              Verileriniz güvenle saklanmaktadır.
+              Kaydolarak{' '}
+              <button
+                type="button"
+                onClick={() => fetchLegalContent('terms')}
+                className="text-primary font-bold hover:underline"
+              >
+                kullanım koşullarımızı
+              </button>
+              {' '}ve{' '}
+              <button
+                type="button"
+                onClick={() => fetchLegalContent('privacy')}
+                className="text-primary font-bold hover:underline"
+              >
+                aydınlatma metnini
+              </button>
+              {' '}kabul etmiş sayılırsınız. Verileriniz güvenle saklanmaktadır.
             </p>
           </CardFooter>
         </Tabs>
@@ -737,87 +816,148 @@ function AuthView() {
       <div className="mt-8 text-slate-400 text-[11px] animate-in fade-in duration-1000 delay-700">
         &copy; {new Date().getFullYear()} Risale-i Nur Okuma Takip Sistemi
       </div>
+
+      {/* Legal Modal with Backdrop Blur */}
+      {legalModal.open && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-md bg-slate-900/40 animate-in fade-in duration-300"
+          onClick={() => setLegalModal({ ...legalModal, open: false })}
+        >
+          <Card
+            className="w-full max-w-lg max-h-[80vh] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-300"
+            onClick={e => e.stopPropagation()}
+          >
+            <CardHeader className="flex flex-row items-center justify-between border-b bg-slate-50/50 py-4">
+              <CardTitle className="text-lg font-bold">{legalModal.title}</CardTitle>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-full"
+                onClick={() => setLegalModal({ ...legalModal, open: false })}
+              >
+                <X size={18} />
+              </Button>
+            </CardHeader>
+            <CardContent className="overflow-y-auto p-6 custom-scrollbar text-sm text-slate-600">
+              <div className="prose prose-slate max-w-none text-left prose-headings:font-bold prose-headings:text-slate-900 prose-p:leading-relaxed prose-li:leading-relaxed prose-headings:mb-4 prose-headings:mt-6 first:prose-headings:mt-0">
+                <ReactMarkdown>{legalModal.content}</ReactMarkdown>
+              </div>
+            </CardContent>
+            <CardFooter className="border-t bg-slate-50/50 py-3 flex justify-end">
+              <Button size="sm" onClick={() => setLegalModal({ ...legalModal, open: false })}>
+                Anladım
+              </Button>
+            </CardFooter>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
 
 function HomeView({ books, finishedStats, logs, getBookProgress, onBookClick, onFinish, onRemove, onAddClick }) {
   return (
-    <div>
-      <div className="header-row">
-        <h1>Okuduklarım</h1>
-        {/* <div style={{background: 'white', padding: '8px', borderRadius: '50%', boxShadow: 'var(--shadow)'}}>
-           <BookOpen size={20} color="var(--primary-color)" />
-        </div> */}
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold text-slate-900">Okuduklarım</h1>
+        <div className="bg-teal-50 p-2 rounded-full text-teal-600">
+          <BookOpen size={20} />
+        </div>
       </div>
 
       {books.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '40px 20px', color: '#64748b' }}>
-          <p>Henüz okunacak bir kitap eklemedin.</p>
-          <button className="btn-primary" style={{ marginTop: '20px' }} onClick={onAddClick}>
-            Kitap Ekle
-          </button>
-        </div>
+        <Card className="p-10 text-center bg-slate-50/50 border-dashed border-2">
+          <BookOpen size={48} className="mx-auto mb-4 text-slate-300" />
+          <CardDescription className="mb-6 text-base text-slate-500">
+            Henüz takip listene bir kitap eklemedin. <br />
+            Külliyattan bir kitap seçerek hemen başla.
+          </CardDescription>
+          <Button onClick={onAddClick} className="shadow-lg shadow-teal-500/20">
+            <Plus className="mr-2 h-4 w-4" /> Kitap Ekle
+          </Button>
+        </Card>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div className="grid gap-4">
           {books.map((book, index) => {
             const color = COLORS[index % COLORS.length];
             const finishedCount = finishedStats[book.title] || 0;
+            const progress = getBookProgress(book);
+
             return (
-              <div key={book.id} className="card" onClick={() => onBookClick(book)} style={{ cursor: 'pointer', flexDirection: 'column', alignItems: 'flex-start', gap: '12px' }}>
+              <Card
+                key={book.id}
+                className="group overflow-hidden hover:shadow-lg transition-all duration-300 cursor-pointer border-slate-100"
+                onClick={() => onBookClick(book)}
+              >
+                <div className="p-4 flex flex-col gap-4">
+                  {/* Top Section */}
+                  <div className="flex items-start gap-4">
+                    <div
+                      style={{ background: color }}
+                      className="w-12 h-16 rounded-lg flex items-center justify-center text-white font-black text-xl shadow-lg shadow-teal-900/10 group-hover:scale-105 transition-transform"
+                    >
+                      {book.title.substring(0, 1)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-start">
+                        <h3 className="font-bold text-lg text-slate-800 truncate mb-1">{book.title}</h3>
+                        <button
+                          onClick={(e) => onRemove(e, book.id)}
+                          className="p-1.5 text-slate-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-all ml-2"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
 
-                {/* Üst Kısım: Başlık ve İkon */}
-                <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: '12px' }}>
-                  <div style={{
-                    width: '40px', height: '54px',
-                    background: color, borderRadius: '6px',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: 'white', fontWeight: 'bold', fontSize: '12px',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                  }}>
-                    {book.title.substring(0, 1)}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ fontSize: '16px', margin: 0 }}>{book.title}</h3>
-                    {finishedCount > 0 && <span style={{ fontSize: '10px', color: '#d97706', fontWeight: 600 }}>Hatim: {finishedCount}</span>}
-                  </div>
-                  <button onClick={(e) => onRemove(e, book.id)} style={{ padding: '8px' }}>
-                    <Trash2 size={16} color="#cbd5e1" />
-                  </button>
-                </div>
-
-                {/* Alt Kısım: Sayaç ve Buton */}
-                <div style={{ display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid #f1f5f9', paddingTop: '12px' }}>
-                  <div>
-                    <div style={{ fontSize: '12px', color: '#94a3b8' }}>Şu an okunan</div>
-                    <div style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
-                      {getBookProgress(book)} <span style={{ fontSize: '12px', fontWeight: 'normal' }}>sayfa</span>
+                      {finishedCount > 0 && (
+                        <div className="flex items-center gap-1">
+                          <CheckCircle size={10} className="text-amber-500" />
+                          <span className="text-[10px] uppercase font-black tracking-tighter text-amber-600">
+                            {finishedCount} Kez Bitirildi
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <button
-                    onClick={(e) => onFinish(e, book)}
-                    style={{
-                      background: '#ecfdf5', color: '#059669',
-                      padding: '8px 12px', borderRadius: '8px',
-                      display: 'flex', alignItems: 'center', gap: '6px',
-                      fontSize: '12px', fontWeight: '600'
-                    }}>
-                    <CheckCircle size={14} />
-                    Bitirdim
-                  </button>
+                  {/* Stats Section */}
+                  <div className="flex items-center justify-between pt-4 border-t border-slate-50">
+                    <div className="space-y-0.5">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Şu an okunan</div>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-2xl font-black text-slate-900 leading-tight">{progress}</span>
+                        <span className="text-xs font-bold text-slate-400">sayfa</span>
+                      </div>
+                    </div>
+
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={(e) => onFinish(e, book)}
+                      className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800 border-none font-bold text-xs h-9 px-4 rounded-xl shadow-sm transition-all active:scale-95"
+                    >
+                      <CheckCircle size={14} className="mr-2" />
+                      Bitirdim
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              </Card>
             );
           })}
-          <button className="card" onClick={onAddClick} style={{ justifyContent: 'center', color: 'var(--primary-color)', border: '2px dashed #cbd5e1', boxShadow: 'none', background: 'transparent' }}>
-            + Başka Kitap Ekle
-          </button>
+
+          <Button
+            variant="ghost"
+            onClick={onAddClick}
+            className="w-full py-8 border-2 border-dashed border-slate-200 rounded-3xl text-slate-400 hover:text-teal-600 hover:border-teal-200 hover:bg-teal-50/50 transition-all font-bold"
+          >
+            <Plus className="mr-2 h-5 w-5" /> Başka Kitap Ekle
+          </Button>
         </div>
       )}
     </div>
   );
 }
+
 
 function CalendarView({ logs }) {
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -981,7 +1121,7 @@ function FriendsView({ userId }) {
   const [memberIdInput, setMemberIdInput] = useState('');
 
   const [selectedFriend, setSelectedFriend] = useState(null);
-  const [movingMember, setMovingMember] = useState(null); // { member, currentGroupId }
+  const [movingMember, setMovingMember] = useState(null); // {member, currentGroupId}
 
   useEffect(() => {
     // Grupları (ve üyeleri) çek. Supabase'de JSONB olarak tutuyoruz members'ı.
@@ -1017,8 +1157,7 @@ function FriendsView({ userId }) {
   const handleAddMember = async () => {
     if (!memberIdInput.trim()) return;
     try {
-      // 1. Kullanıcıyı bul
-      const { data: foundUsers } = await supabase.from('users').select('*').eq('public_id', memberIdInput.trim());
+      const { data: foundUsers } = await supabase.from('users').select('*').eq('public_id', memberIdInput.trim().toUpperCase());
 
       if (!foundUsers || foundUsers.length === 0) {
         alert("Böyle bir Kullanıcı ID bulunamadı.");
@@ -1029,20 +1168,16 @@ function FriendsView({ userId }) {
       const realMemberId = foundUser.id;
       const name = foundUser.name || `Öğrenci ${memberIdInput}`;
 
-      // 2. Grubu güncelle
-      // Önce mevcut grubu bulalım
       const groupidx = groups.findIndex(g => g.id === activeGroupId);
       if (groupidx === -1) return;
       const currentMembers = groups[groupidx].members || [];
 
-      // Ekle (eğer yoksa)
       if (currentMembers.find(m => m.id === realMemberId)) {
         alert("Zaten ekli.");
         return;
       }
 
       const newMembers = [...currentMembers, { id: realMemberId, name }];
-
       await supabase.from('following_groups').update({ members: newMembers }).eq('id', activeGroupId);
 
       setMemberIdInput('');
@@ -1089,15 +1224,12 @@ function FriendsView({ userId }) {
     const { member, currentGroupId } = movingMember;
 
     try {
-      // 1. Eski gruptan çıkar
       const sourceGroup = groups.find(g => g.id === currentGroupId);
       const filteredMembers = sourceGroup.members.filter(m => m.id !== member.id);
 
-      // 2. Yeni gruba ekle
       const targetGroup = groups.find(g => g.id === targetGroupId);
       const updatedTargetMembers = [...(targetGroup.members || []), member];
 
-      // Paralel güncelleme (Veya sırayla)
       await Promise.all([
         supabase.from('following_groups').update({ members: filteredMembers }).eq('id', currentGroupId),
         supabase.from('following_groups').update({ members: updatedTargetMembers }).eq('id', targetGroupId)
@@ -1115,65 +1247,107 @@ function FriendsView({ userId }) {
   }
 
   return (
-    <div>
-      <div className="header-row">
-        <h1>Arkadaşlar</h1>
-        <button onClick={() => setShowAddGroup(true)} style={{ color: 'var(--primary-color)', fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <Plus size={16} /> Grup Ekle
-        </button>
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold text-slate-900">Takip</h1>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowAddGroup(true)}
+          className="text-teal-600 border-teal-200 hover:bg-teal-50"
+        >
+          <Plus className="mr-2 h-4 w-4" /> Grup Ekle
+        </Button>
       </div>
 
-      {loading && <div style={{ color: '#94a3b8', textAlign: 'center' }}>Yükleniyor...</div>}
-
-      {!loading && groups.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
-          <p>Henüz hiç grup oluşturmadın.</p> <br />
-          <button className="btn-primary" onClick={() => setShowAddGroup(true)} style={{ width: 'auto', margin: '0 auto' }}>Grup Oluştur</button>
+      {loading && (
+        <div className="flex justify-center py-10">
+          <Loader2 className="h-8 w-8 animate-spin text-teal-500" />
         </div>
       )}
 
+      {!loading && groups.length === 0 && (
+        <Card className="p-10 text-center bg-slate-50/50 border-dashed">
+          <CardDescription className="mb-4 text-base">Henüz hiç grup oluşturmadın. Talebelerini gruplara ayırarak takibini kolaylaştırabilirsin.</CardDescription>
+          <Button onClick={() => setShowAddGroup(true)} className="mx-auto">Grup Oluştur</Button>
+        </Card>
+      )}
+
       {groups.map(group => (
-        <div key={group.id} style={{ marginBottom: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', padding: '0 4px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <h3 style={{ margin: 0, color: 'var(--primary-color)', fontSize: '18px' }}>{group.name}</h3>
-              <button onClick={() => openEditGroup(group)} style={{ background: 'transparent', border: 'none', padding: '4px', cursor: 'pointer' }}>
-                <Pencil size={14} color="#94a3b8" />
+        <div key={group.id} className="space-y-3">
+          <div className="flex justify-between items-center px-1">
+            <div className="flex items-center gap-2">
+              <h3 className="font-bold text-lg text-slate-800">{group.name}</h3>
+              <button
+                onClick={() => openEditGroup(group)}
+                className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
+                title="Grubu Düzenle"
+              >
+                <Pencil size={14} />
               </button>
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={() => setActiveGroupId(group.id)} style={{ fontSize: '12px', background: '#e0e7ff', color: '#4338ca', padding: '4px 8px', borderRadius: '6px', border: 'none' }}>+ Talebe Ekle</button>
-              <button onClick={() => handleDeleteGroup(group.id)} style={{ background: 'transparent', border: 'none', padding: 0 }}><X size={16} color="#ef4444" /></button>
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setActiveGroupId(group.id)}
+                className="h-8 text-xs font-semibold px-3 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border-none"
+              >
+                + Talebe Ekle
+              </Button>
+              <button
+                onClick={() => handleDeleteGroup(group.id)}
+                className="p-1 text-red-300 hover:text-red-500 transition-colors"
+                title="Grubu Sil"
+              >
+                <X size={18} />
+              </button>
             </div>
           </div>
 
-          <div style={{ display: 'grid', gap: '8px' }}>
+          <div className="grid gap-2">
             {group.members && group.members.length > 0 ? (
               group.members.map(member => (
-                <div key={member.id} className="card" onClick={() => setSelectedFriend(member)} style={{ cursor: 'pointer', marginBottom: 0 }}>
-                  <div style={{
-                    width: '36px', height: '36px', borderRadius: '50%', background: '#f1f5f9',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#64748b'
-                  }}>
-                    {member.name.substring(0, 1)}
+                <Card
+                  key={member.id}
+                  className="p-3 hover:shadow-md transition-all cursor-pointer border-slate-100"
+                  onClick={() => setSelectedFriend(member)}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-500 border border-slate-200">
+                      {member.name.substring(0, 1).toUpperCase()}
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-semibold text-slate-800">{member.name}</div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMovingMember({ member, currentGroupId: group.id });
+                        }}
+                        className="p-2 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-all"
+                        title="Grubu Değiştir"
+                      >
+                        <Settings2 size={16} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveMember(group.id, member);
+                        }}
+                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                        title="Gruptan Çıkar"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                      <ChevronRight size={18} className="text-slate-300 ml-1" />
+                    </div>
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: '600', fontSize: '14px' }}>{member.name}</div>
-                    {/* Burada lastReading bilgisi yok, detayda var. */}
-                  </div>
-                  <div style={{ display: 'flex', gap: '4px' }}>
-                    <button onClick={(e) => { e.stopPropagation(); setMovingMember({ member, currentGroupId: group.id }); }} style={{ background: 'transparent', border: 'none', padding: '4px' }}>
-                      <Settings2 size={16} color="#94a3b8" />
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); handleRemoveMember(group.id, member); }} style={{ background: 'transparent', border: 'none', padding: '4px' }}>
-                      <Trash2 size={16} color="#ef4444" opacity={0.5} />
-                    </button>
-                  </div>
-                  <ChevronRight size={18} color="#cbd5e1" />
-                </div>
+                </Card>
               ))
             ) : (
-              <div style={{ padding: '16px', background: '#f8fafc', borderRadius: '12px', fontSize: '13px', color: '#94a3b8', textAlign: 'center', border: '1px dashed #cbd5e1' }}>
+              <div className="py-8 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200 text-sm text-slate-400 text-center">
                 Bu grupta henüz kimse yok.
               </div>
             )}
@@ -1181,80 +1355,113 @@ function FriendsView({ userId }) {
         </div>
       ))}
 
-      {/* Modals... */}
+      {/* Modals using Shadcn components where possible */}
       {showAddGroup && (
         <div className="modal-overlay" onClick={() => setShowAddGroup(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="header-row">
-              <h3>Yeni Grup Oluştur</h3>
-              <button onClick={() => setShowAddGroup(false)}><X size={20} color="#64748b" /></button>
+          <Card className="w-[90%] max-w-sm p-6 animate-in slide-in-from-bottom-5 duration-300" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold">Yeni Grup Oluştur</h3>
+              <button onClick={() => setShowAddGroup(false)} className="text-slate-400"><X size={20} /></button>
             </div>
-            <input value={groupNameInput} onChange={e => setGroupNameInput(e.target.value)} placeholder="Grup Adı (örn: Liseli Talebeler)" autoFocus />
-            <button className="btn-primary" onClick={handleAddGroup}>Oluştur</button>
-          </div>
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="group-name">Grup Adı</Label>
+                <Input
+                  id="group-name"
+                  value={groupNameInput}
+                  onChange={e => setGroupNameInput(e.target.value)}
+                  placeholder="örn: Liseli Talebeler"
+                  autoFocus
+                  className="text-left h-11"
+                />
+              </div>
+              <Button className="w-full h-11" onClick={handleAddGroup}>Oluştur</Button>
+            </div>
+          </Card>
         </div>
       )}
 
       {showEditGroup && (
         <div className="modal-overlay" onClick={() => { setShowEditGroup(false); setEditingGroupId(null); setEditGroupNameInput(''); }}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="header-row">
-              <h3>Grubu Düzenle</h3>
-              <button onClick={() => { setShowEditGroup(false); setEditingGroupId(null); setEditGroupNameInput(''); }}><X size={20} color="#64748b" /></button>
+          <Card className="w-[90%] max-w-sm p-6 animate-in slide-in-from-bottom-5 duration-300" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold">Grubu Düzenle</h3>
+              <button onClick={() => { setShowEditGroup(false); setEditingGroupId(null); setEditGroupNameInput(''); }} className="text-slate-400"><X size={20} /></button>
             </div>
-            <input value={editGroupNameInput} onChange={e => setEditGroupNameInput(e.target.value)} placeholder="Grup Adı" autoFocus />
-            <button className="btn-primary" onClick={handleEditGroup}>Kaydet</button>
-          </div>
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-group-name">Yeni Grup Adı</Label>
+                <Input
+                  id="edit-group-name"
+                  value={editGroupNameInput}
+                  onChange={e => setEditGroupNameInput(e.target.value)}
+                  placeholder="Grup Adı"
+                  autoFocus
+                  className="text-left h-11"
+                />
+              </div>
+              <Button className="w-full h-11" onClick={handleEditGroup}>Kaydet</Button>
+            </div>
+          </Card>
         </div>
       )}
 
       {activeGroupId && (
         <div className="modal-overlay" onClick={() => setActiveGroupId(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="header-row">
-              <h3>Talebe Ekle</h3>
-              <button onClick={() => setActiveGroupId(null)}><X size={20} color="#64748b" /></button>
+          <Card className="w-[90%] max-w-sm p-6 animate-in slide-in-from-bottom-5 duration-300" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold">Talebe Ekle</h3>
+              <button onClick={() => setActiveGroupId(null)} className="text-slate-400"><X size={20} /></button>
             </div>
-            <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '12px' }}>Eklemek istediğin kişinin Kullanıcı ID'sini gir.</p>
-            <input value={memberIdInput} onChange={e => setMemberIdInput(e.target.value)} placeholder="Talebe ID (örn: TR9923X1232)" autoFocus />
-            <button className="btn-primary" onClick={handleAddMember}>Ekle</button>
-          </div>
+            <p className="text-sm text-slate-500 mb-6 leading-relaxed">Eklemek istediğin kişinin profilindeki benzersiz <b>Kullanıcı ID</b>'sini (örn: TR1234X5678) gir.</p>
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="member-id">Kullanıcı ID</Label>
+                <Input
+                  id="member-id"
+                  value={memberIdInput}
+                  onChange={e => setMemberIdInput(e.target.value)}
+                  placeholder="TR...."
+                  autoFocus
+                  className="text-left h-11 tracking-wider font-mono font-bold uppercase"
+                />
+              </div>
+              <Button className="w-full h-11" onClick={handleAddMember}>Gruba Ekle</Button>
+            </div>
+          </Card>
         </div>
       )}
 
       {movingMember && (
         <div className="modal-overlay" onClick={() => setMovingMember(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="header-row">
-              <h3>Grubu Değiştir</h3>
-              <button onClick={() => setMovingMember(null)}><X size={20} color="#64748b" /></button>
+          <Card className="w-[90%] max-w-sm p-6 animate-in slide-in-from-bottom-5 duration-300" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold">Grubu Değiştir</h3>
+              <button onClick={() => setMovingMember(null)} className="text-slate-400"><X size={20} /></button>
             </div>
-            <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '16px' }}>
-              <strong>{movingMember.member.name}</strong> isimli kişiyi hangi gruba taşımak istiyorsun?
+            <p className="text-sm text-slate-500 mb-6">
+              <span className="font-bold text-slate-700">{movingMember.member.name}</span> isimli kişiyi hangi gruba taşımak istiyorsun?
             </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div className="grid gap-2">
               {groups.filter(g => g.id !== movingMember.currentGroupId).length > 0 ? (
                 groups.filter(g => g.id !== movingMember.currentGroupId).map(group => (
                   <button
                     key={group.id}
                     onClick={() => handleMoveMember(group.id)}
-                    style={{
-                      textAlign: 'left', padding: '12px', borderRadius: '12px',
-                      background: '#f1f5f9', border: '1px solid #e2e8f0',
-                      fontWeight: '500', color: '#1e293b'
-                    }}
+                    className="w-full text-left p-4 rounded-xl border border-slate-200 hover:border-teal-500 hover:bg-teal-50/30 transition-all font-medium text-slate-700"
                   >
                     {group.name}
                   </button>
                 ))
               ) : (
-                <p style={{ fontSize: '12px', color: '#ef4444', textAlign: 'center' }}>Taşıyabileceğin başka bir grup bulunmuyor.</p>
+                <div className="p-4 bg-red-50 rounded-xl text-xs text-red-500 text-center border border-red-100">
+                  Taşıyabileceğin başka bir grup bulunmuyor.
+                </div>
               )}
             </div>
-          </div>
+          </Card>
         </div>
       )}
-
     </div>
   );
 }
@@ -1265,8 +1472,6 @@ function FriendDetailView({ friend, onBack }) {
 
   useEffect(() => {
     const fetchFriendLogs = async () => {
-      // Friend ID aslında Supabase User ID (Auth ID)
-      // Logları çek
       const { data } = await supabase.from('reading_logs').select('*').eq('user_id', friend.id);
 
       if (data) {
@@ -1274,7 +1479,7 @@ function FriendDetailView({ friend, onBack }) {
         data.forEach(log => {
           const d = log.date;
           if (!logsMap[d]) logsMap[d] = [];
-          logsMap[d].push(log); // log.amount, log.title
+          logsMap[d].push(log);
         });
         setLogs(logsMap);
       }
@@ -1284,17 +1489,18 @@ function FriendDetailView({ friend, onBack }) {
   }, [friend]);
 
   return (
-    <div>
-      <div className="header-row">
-        <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#64748b' }}>
-          <ChevronRight size={20} style={{ transform: 'rotate(180deg)' }} /> Geri
+    <div className="space-y-4">
+      <div className="flex items-center gap-4 mb-2">
+        <button onClick={onBack} className="p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
+          <ChevronRight size={24} className="rotate-180" />
         </button>
-        <h3 style={{ margin: 0 }}>{friend.name}</h3>
-        <div style={{ width: 24 }}></div> {/* Spacer to center title */}
+        <h1 className="text-xl font-bold text-slate-900">{friend.name} Takibi</h1>
       </div>
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '20px', color: '#94a3b8' }}>Yükleniyor...</div>
+        <div className="flex justify-center py-10">
+          <Loader2 className="h-8 w-8 animate-spin text-teal-500" />
+        </div>
       ) : (
         <CalendarView logs={logs} />
       )}
@@ -1303,62 +1509,114 @@ function FriendDetailView({ friend, onBack }) {
 }
 
 function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, requestNotifPermission, notifPermission }) {
+  // Hatim Calculation - Lowest count of all 14 books
   const hatimCount = Math.min(...RISALE_BOOKS.map(title => finishedStats[title] || 0));
+
+  // Progress towards next hatim
+  const booksTowardsNext = RISALE_BOOKS.filter(title => (finishedStats[title] || 0) > hatimCount).length;
+  const progressPercent = Math.round((booksTowardsNext / 14) * 100);
+
   return (
-    <div>
-      <div className="header-row">
-        <h1>Profil</h1>
-        <button onClick={onLogout} style={{ fontSize: '12px', color: '#ef4444', fontWeight: '600', background: 'transparent', padding: '4px 8px', borderRadius: '6px', border: '1px solid #fee2e2' }}>
+    <div className="space-y-6">
+      <div className="flex justify-between items-center px-1">
+        <h1 className="text-2xl font-bold text-slate-900">Profil</h1>
+        <Button variant="ghost" size="sm" onClick={onLogout} className="text-red-500 hover:text-red-600 hover:bg-red-50 font-semibold">
           Çıkış Yap
-        </button>
+        </Button>
       </div>
 
-      <div className="card" style={{ flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '32px' }}>
-        <div style={{
-          width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, #0d9488 0%, #115e59 100%)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', marginBottom: '16px',
-          fontSize: '32px', fontWeight: 'bold'
-        }}>
-          {name ? name.substring(0, 2).toUpperCase() : '??'}
-        </div>
-        <h2 style={{ fontSize: '20px', margin: '0 0 4px 0' }}>{name}</h2>
-        <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>Risale-i Nur Okuyucusu</p>
-
-        <div style={{
-          marginTop: '16px', background: '#f8fafc', padding: '12px 24px', borderRadius: '12px',
-          border: '2px dashed #cbd5e1', textAlign: 'center', cursor: 'pointer', position: 'relative'
-        }} onClick={() => { navigator.clipboard.writeText(publicId); alert("Kopyalandı: " + publicId); }}>
-          <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '2px' }}>KULLANICI ID (kopyala)</div>
-          <div style={{ fontSize: '20px', fontWeight: '800', letterSpacing: '1px', color: 'var(--text-primary)' }}>{publicId}</div>
-        </div>
-      </div>
-
-      {/* Bildirim Hatırlatıcısı Kartı */}
-      <div className="card" style={{ justifyContent: 'space-between', alignItems: 'center', background: notifPermission === 'granted' ? '#f0fdf4' : '#fff' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{ background: notifPermission === 'granted' ? '#22c55e' : '#f1f5f9', color: notifPermission === 'granted' ? 'white' : '#64748b', padding: '10px', borderRadius: '12px' }}>
-            {notifPermission === 'granted' ? <Bell size={20} /> : <BellOff size={20} />}
+      <Card className="p-8 border-none shadow-lg shadow-slate-200/50 bg-gradient-to-br from-white to-slate-50 overflow-hidden relative">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-teal-500/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
+        <div className="relative flex flex-col items-center text-center">
+          <div className="w-24 h-24 rounded-full bg-gradient-to-br from-teal-500 to-teal-700 flex items-center justify-center text-white mb-4 shadow-xl shadow-teal-500/20 text-4xl font-extrabold ring-4 ring-white">
+            {name ? name.substring(0, 1).toUpperCase() : '??'}
           </div>
+          <h2 className="text-2xl font-bold text-slate-800 mb-1">{name}</h2>
+          <p className="text-slate-500 text-sm font-medium mb-6">Nur Talebesi</p>
+
+          <div
+            className="group relative cursor-pointer active:scale-95 transition-all"
+            onClick={() => {
+              navigator.clipboard.writeText(publicId);
+              alert("Kopyalandı: " + publicId);
+            }}
+          >
+            <div className="bg-white border-2 border-slate-100 rounded-2xl py-3 px-6 shadow-sm group-hover:border-teal-400 group-hover:shadow-md transition-all">
+              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Takip Kodun</div>
+              <div className="text-2xl font-black text-slate-900 tracking-wider font-mono uppercase">{publicId}</div>
+            </div>
+            <div className="absolute -top-2 -right-2 bg-slate-900 text-white p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
+              <ArrowRight size={12} className="-rotate-45" />
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Hatim Progress Stats */}
+      <Card
+        className="p-5 border-none shadow-md hover:shadow-lg transition-shadow cursor-pointer"
+        onClick={onShowHatimler}
+      >
+        <div className="flex justify-between items-start mb-4">
           <div>
-            <div style={{ fontSize: '14px', fontWeight: 'bold' }}>Akşam Hatırlatması</div>
-            <div style={{ fontSize: '12px', color: '#64748b' }}>Saat 21:00'de okuma uyarısı</div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Toplam Külliyat Bitirme</div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-4xl font-black text-teal-600 leading-none">{hatimCount}</span>
+              <span className="text-sm font-bold text-slate-400 uppercase">Hatim</span>
+            </div>
+          </div>
+          <div className="bg-teal-50 p-2 rounded-xl text-teal-600">
+            <CheckCircle size={24} />
           </div>
         </div>
-        {notifPermission !== 'granted' ? (
-          <button onClick={requestNotifPermission} className="btn-primary" style={{ padding: '8px 16px', fontSize: '12px', width: 'auto' }}>
-            Aç
-          </button>
-        ) : (
-          <span style={{ fontSize: '12px', color: '#22c55e', fontWeight: 'bold' }}>AÇIK</span>
-        )}
-      </div>
 
-      <div className="card" onClick={onShowHatimler} style={{ cursor: 'pointer', justifyContent: 'space-between' }}>
-        <div>
-          <div style={{ fontSize: '12px', color: '#94a3b8' }}>Toplam Hatim</div>
-          <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary-color)' }}>{hatimCount} <span style={{ fontSize: '12px' }}>hatim</span></div>
+        <div className="space-y-3 pt-2">
+          <div className="flex justify-between text-xs font-bold items-end">
+            <span className="text-slate-500 uppercase">Sonraki Hatime Doğru</span>
+            <span className="text-teal-600 text-sm">{booksTowardsNext} / 14 Kitap</span>
+          </div>
+          <div className="h-3 bg-slate-100 rounded-full overflow-hidden border border-slate-200/50">
+            <div
+              className="h-full bg-gradient-to-r from-teal-400 to-teal-600 rounded-full transition-all duration-1000 ease-out"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+          <p className="text-[11px] text-slate-400 font-medium">
+            {hatimCount + 1}. Hatim için {14 - booksTowardsNext} kitap kaldı. Detaylar için dokun.
+          </p>
         </div>
-        <ChevronRight size={24} color="#cbd5e1" />
+      </Card>
+
+      {/* Notifications Toggle */}
+      <Card className="p-4 border-none shadow-sm bg-white">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className={`p-3 rounded-2xl transition-colors ${notifPermission === 'granted' ? 'bg-teal-100 text-teal-600' : 'bg-slate-100 text-slate-400'}`}>
+              {notifPermission === 'granted' ? <Bell size={20} /> : <BellOff size={20} />}
+            </div>
+            <div>
+              <div className="text-sm font-bold text-slate-800">Akşam Hatırlatması</div>
+              <div className="text-[11px] text-slate-500 font-medium leading-tight">Saat 21:00'de bugün okuma<br />yapılmadıysa uyarı ver.</div>
+            </div>
+          </div>
+          {notifPermission !== 'granted' ? (
+            <Button size="sm" onClick={requestNotifPermission} className="h-9 px-4 rounded-xl shadow-lg shadow-teal-500/10">
+              Etkinleştir
+            </Button>
+          ) : (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-50 text-teal-600 rounded-xl text-[10px] font-black uppercase tracking-wider">
+              <div className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse" />
+              Aktif
+            </div>
+          )}
+        </div>
+      </Card>
+
+      <div className="text-center pt-2">
+        <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest leading-loose">
+          Risale-i Nur Okuma Takip Sistemi<br />
+          Bu dünya, bir misafirhanedir.
+        </p>
       </div>
     </div>
   );
@@ -1366,45 +1624,40 @@ function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, 
 
 function HatimlerView({ finishedStats, onBack, onEdit }) {
   return (
-    <div>
-      <div className="header-row">
-        <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#64748b' }}>
-          <ChevronRight size={20} style={{ transform: 'rotate(180deg)' }} /> Geri
+    <div className="space-y-6">
+      <div className="flex items-center gap-4 mb-2">
+        <button onClick={onBack} className="p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
+          <ChevronRight size={24} className="rotate-180" />
         </button>
-        <h1 style={{ margin: 0 }}>Hatimler</h1>
-        <div style={{ width: 24 }}></div>
+        <h1 className="text-xl font-bold text-slate-900">Hatim Detayları</h1>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div className="grid gap-3">
         {RISALE_BOOKS.map((bookTitle, index) => {
           const count = finishedStats[bookTitle] || 0;
           const color = COLORS[index % COLORS.length];
           return (
-            <div
+            <Card
               key={bookTitle}
-              className="card"
               onClick={() => onEdit(bookTitle)}
-              style={{ cursor: 'pointer' }}
+              className="p-3 hover:shadow-md transition-all cursor-pointer border-slate-100 group"
             >
-              <div style={{
-                width: '40px', height: '54px',
-                background: color, borderRadius: '6px',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: 'white', fontWeight: 'bold', fontSize: '12px',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-                flexShrink: 0
-              }}>
-                {bookTitle.substring(0, 1)}
+              <div className="flex items-center gap-4">
+                <div style={{ background: color }} className="w-10 h-14 rounded-lg flex items-center justify-center text-white font-black text-lg shadow-lg shadow-inner opacity-90 group-hover:scale-105 transition-transform">
+                  {bookTitle.substring(0, 1)}
+                </div>
+                <div className="flex-1">
+                  <div className="font-bold text-slate-800 group-hover:text-teal-600 transition-colors">{bookTitle}</div>
+                  <div className="text-xs font-medium text-slate-400">Tamamlanan Devir</div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-2xl font-black text-slate-900 leading-none">
+                    {count}
+                  </div>
+                  <ChevronRight size={18} className="text-slate-300" />
+                </div>
               </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: '600' }}>{bookTitle}</div>
-                <div style={{ fontSize: '12px', color: '#94a3b8' }}>Bitirme sayısı</div>
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary-color)' }}>
-                {count}
-              </div>
-              <ChevronRight size={20} color="#cbd5e1" style={{ marginLeft: '8px' }} />
-            </div>
+            </Card>
           );
         })}
       </div>
@@ -1413,22 +1666,23 @@ function HatimlerView({ finishedStats, onBack, onEdit }) {
 }
 
 function NavBar({ activeTab, setActiveTab }) {
-  // ... NavBar aynı kalabilir ...
   return (
     <div className="nav-bar">
-      <NavButton active={activeTab === 'home'} onClick={() => setActiveTab('home')} icon={<Home size={24} />} label="Okuduklarım" />
-      <NavButton active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} icon={<Calendar size={24} />} label="Takvim" />
-      <NavButton active={activeTab === 'friends'} onClick={() => setActiveTab('friends')} icon={<Users size={24} />} label="Takip" />
-      <NavButton active={activeTab === 'profile'} onClick={() => setActiveTab('profile')} icon={<User size={24} />} label="Profil" />
+      <NavButton active={activeTab === 'home'} onClick={() => setActiveTab('home')} icon={<Home size={22} />} label="Takip" />
+      <NavButton active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} icon={<Calendar size={22} />} label="Geçmiş" />
+      <NavButton active={activeTab === 'friends'} onClick={() => setActiveTab('friends')} icon={<Users size={22} />} label="Grup" />
+      <NavButton active={activeTab === 'profile'} onClick={() => setActiveTab('profile')} icon={<User size={22} />} label="Profil" />
     </div>
   );
 }
 
 function NavButton({ active, onClick, icon, label }) {
   return (
-    <button className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}>
-      <div className="nav-icon">{icon}</div>
-      <span>{label}</span>
+    <button className={`nav-item flex-1 ${active ? 'active' : ''}`} onClick={onClick}>
+      <div className={`p-1 rounded-xl transition-all ${active ? 'bg-teal-50 animate-in zoom-in-95' : ''}`}>
+        {icon}
+      </div>
+      <span className="font-bold tracking-tight">{label}</span>
     </button>
   );
 }
