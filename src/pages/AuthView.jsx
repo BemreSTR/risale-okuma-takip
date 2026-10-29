@@ -58,7 +58,14 @@ export default function AuthView() {
     setErrorMsg('')
     setLoading(true)
     try {
-      // 1. Benzersiz bir Public ID bulana kadar dene
+      // 1. Firebase Auth ile Kayıt
+      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password)
+      const user = userCredential.user
+
+      // Profile güncelle (displayName)
+      await updateProfile(user, { displayName: name.trim() })
+
+      // 2. Benzersiz bir Public ID bulana kadar dene (Kullanıcı artık authenticated)
       let publicId = ''
       let isUnique = false
       let attempts = 0
@@ -74,16 +81,11 @@ export default function AuthView() {
         attempts++
       }
 
-      if (!publicId) throw new Error('ID oluşturulamadı, lütfen tekrar deneyin.')
+      if (!publicId) {
+        publicId = generatePublicId()
+      }
 
-      // 2. Firebase Auth ile Kayıt
-      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password)
-      const user = userCredential.user
-
-      // Profile güncelle (displayName)
-      await updateProfile(user, { displayName: name.trim() })
-
-      // Firestore'da users dokümanı oluştur
+      // 3. Firestore'da users dokümanı oluştur
       await setDoc(doc(db, 'users', user.uid), {
         id: user.uid,
         name: name.trim(),
