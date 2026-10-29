@@ -1,0 +1,287 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // This security rules file assumes the following data structures:
+    //
+    // Collection: users
+    // Document ID: {userId} (matches request.auth.uid)
+    // Fields:
+    //   - id: string (required, 1-128 chars, matches auth.uid) - Document owner UID
+    //   - name: string (required, 1-100 chars) - User display name
+    //   - email: string (required, 3-254 chars, valid email format) - User email
+    //   - public_id: string (required, 6-30 chars, alphanumeric) - Unique public share ID
+    //   - created_at: string (required, 10-40 chars, ISO 8601 string) - Account creation time
+    //
+    // Collection: books
+    // Document ID: {bookId}
+    // Fields:
+    //   - user_id: string (required, 1-128 chars, matches auth.uid) - Owner UID
+    //   - title: string (required, 1-100 chars) - Book title
+    //   - current_pages: number (required, 0 to 1,000,000) - Current read page count
+    //   - added_at: string (required, 10-40 chars, ISO 8601 string) - Date added
+    //   - last_reset: string (optional, 10-40 chars, ISO 8601 string) - Last completion date
+    //
+    // Collection: reading_logs
+    // Document ID: {logId}
+    // Fields:
+    //   - user_id: string (required, 1-128 chars, matches auth.uid) - Owner UID
+    //   - book_id: string (required, 1-128 chars) - Associated book ID
+    //   - title: string (required, 1-100 chars) - Book title
+    //   - amount: number (required, 1 to 10,000) - Number of pages read
+    //   - date: string (required, YYYY-MM-DD format) - Date of the reading log
+    //   - created_at: string (optional, 10-40 chars, ISO 8601 string) - Creation time
+    //
+    // Collection: book_stats
+    // Document ID: {statId}
+    // Fields:
+    //   - user_id: string (required, 1-128 chars, matches auth.uid) - Owner UID
+    //   - book_title: string (required, 1-100 chars) - Title of the book
+    //   - count: number (required, 0 to 100,000) - Finished/hatim count
+    //
+    // Collection: following_groups
+    // Document ID: {groupId}
+    // Fields:
+    //   - user_id: string (required, 1-128 chars, matches auth.uid) - Group owner UID
+    //   - name: string (required, 1-100 chars) - Group name
+    //   - members: list (required, 0 to 100 elements) - Array of member profiles
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+             email.size() >= 3 &&
+             email.size() <= 254 &&
+             email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+
+    function isValidPublicId(publicId) {
+      return publicId is string &&
+             publicId.size() >= 6 &&
+             publicId.size() <= 30 &&
+             publicId.matches('^[A-Za-z0-9_-]+$');
+    }
+
+    function isValidIsoTimestamp(str) {
+      return str is string &&
+             str.size() >= 10 &&
+             str.size() <= 40 &&
+             str.matches('^\\d{4}-\\d{2}-\\d{2}T.*$');
+    }
+
+    function isValidDate(dateStr) {
+      return dateStr is string &&
+             dateStr.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data, userId) {
+      return data.keys().hasOnly(['id', 'name', 'email', 'public_id', 'created_at']) &&
+             data.keys().hasAll(['id', 'name', 'email', 'public_id', 'created_at']) &&
+             data.id is string &&
+             data.id == userId &&
+             data.id == request.auth.uid &&
+             data.name is string &&
+             data.name.size() >= 1 &&
+             data.name.size() <= 100 &&
+             isValidEmail(data.email) &&
+             isValidPublicId(data.public_id) &&
+             isValidIsoTimestamp(data.created_at);
+    }
+
+    function isValidBook(data) {
+      return data.keys().hasOnly(['user_id', 'title', 'current_pages', 'added_at', 'last_reset']) &&
+             data.keys().hasAll(['user_id', 'title', 'current_pages', 'added_at']) &&
+             data.user_id is string &&
+             data.user_id.size() >= 1 &&
+             data.user_id.size() <= 128 &&
+             data.title is string &&
+             data.title.size() >= 1 &&
+             data.title.size() <= 100 &&
+             data.current_pages is number &&
+             data.current_pages >= 0 &&
+             data.current_pages <= 1000000 &&
+             isValidIsoTimestamp(data.added_at) &&
+             (!('last_reset' in data) || isValidIsoTimestamp(data.last_reset));
+    }
+
+    function isValidReadingLog(data) {
+      return data.keys().hasOnly(['user_id', 'book_id', 'title', 'amount', 'date', 'created_at']) &&
+             data.keys().hasAll(['user_id', 'book_id', 'title', 'amount', 'date']) &&
+             data.user_id is string &&
+             data.user_id.size() >= 1 &&
+             data.user_id.size() <= 128 &&
+             data.book_id is string &&
+             data.book_id.size() >= 1 &&
+             data.book_id.size() <= 128 &&
+             data.title is string &&
+             data.title.size() >= 1 &&
+             data.title.size() <= 100 &&
+             data.amount is number &&
+             data.amount >= 1 &&
+             data.amount <= 10000 &&
+             isValidDate(data.date) &&
+             (!('created_at' in data) || isValidIsoTimestamp(data.created_at));
+    }
+
+    function isValidBookStat(data) {
+      return data.keys().hasOnly(['user_id', 'book_title', 'count']) &&
+             data.keys().hasAll(['user_id', 'book_title', 'count']) &&
+             data.user_id is string &&
+             data.user_id.size() >= 1 &&
+             data.user_id.size() <= 128 &&
+             data.book_title is string &&
+             data.book_title.size() >= 1 &&
+             data.book_title.size() <= 100 &&
+             data.count is number &&
+             data.count >= 0 &&
+             data.count <= 100000;
+    }
+
+    function isValidFollowingGroup(data) {
+      return data.keys().hasOnly(['user_id', 'name', 'members']) &&
+             data.keys().hasAll(['user_id', 'name', 'members']) &&
+             data.user_id is string &&
+             data.user_id.size() >= 1 &&
+             data.user_id.size() <= 128 &&
+             data.name is string &&
+             data.name.size() >= 1 &&
+             data.name.size() <= 100 &&
+             data.members is list &&
+             data.members.size() >= 0 &&
+             data.members.size() <= 100;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // 1. Users collection
+    match /users/{userId} {
+      // Authenticated users can read to search by public_id and view profiles
+      allow read: if isAuthenticated();
+
+      // Only the authenticated user can create their own document
+      allow create: if isOwner(userId) &&
+                       isValidUser(request.resource.data, userId);
+
+      // Only the owner can update; id, public_id, and created_at cannot be modified
+      allow update: if isOwner(userId) &&
+                       isValidUser(request.resource.data, userId) &&
+                       request.resource.data.id == resource.data.id &&
+                       request.resource.data.public_id == resource.data.public_id &&
+                       request.resource.data.created_at == resource.data.created_at;
+
+      // User account documents cannot be deleted directly
+      allow delete: if false;
+    }
+
+    // 2. Books collection
+    match /books/{bookId} {
+      // Strictly owner-only read
+      allow read: if isAuthenticated() && request.auth.uid == resource.data.user_id;
+
+      // Only owner can create a book document
+      allow create: if isAuthenticated() &&
+                       request.auth.uid == request.resource.data.user_id &&
+                       isValidBook(request.resource.data);
+
+      // Only owner can update; user_id and added_at cannot be modified
+      allow update: if isAuthenticated() &&
+                       request.auth.uid == resource.data.user_id &&
+                       request.resource.data.user_id == resource.data.user_id &&
+                       request.resource.data.added_at == resource.data.added_at &&
+                       isValidBook(request.resource.data);
+
+      // Only owner can delete their book
+      allow delete: if isAuthenticated() && request.auth.uid == resource.data.user_id;
+    }
+
+    // 3. Reading Logs collection
+    match /reading_logs/{logId} {
+      // Any authenticated user can read logs (for friends viewing shared calendar)
+      allow read: if isAuthenticated();
+
+      // Only owner can create reading logs
+      allow create: if isAuthenticated() &&
+                       request.auth.uid == request.resource.data.user_id &&
+                       isValidReadingLog(request.resource.data);
+
+      // Only owner can update; user_id, book_id, and created_at are immutable
+      allow update: if isAuthenticated() &&
+                       request.auth.uid == resource.data.user_id &&
+                       request.resource.data.user_id == resource.data.user_id &&
+                       request.resource.data.book_id == resource.data.book_id &&
+                       (!('created_at' in resource.data) || !('created_at' in request.resource.data) || request.resource.data.created_at == resource.data.created_at) &&
+                       isValidReadingLog(request.resource.data);
+
+      // Only owner can delete their reading log
+      allow delete: if isAuthenticated() && request.auth.uid == resource.data.user_id;
+    }
+
+    // 4. Book Stats collection
+    match /book_stats/{statId} {
+      // Any authenticated user can read stats
+      allow read: if isAuthenticated();
+
+      // Only owner can create stats
+      allow create: if isAuthenticated() &&
+                       request.auth.uid == request.resource.data.user_id &&
+                       isValidBookStat(request.resource.data);
+
+      // Only owner can update; user_id and book_title are immutable
+      allow update: if isAuthenticated() &&
+                       request.auth.uid == resource.data.user_id &&
+                       request.resource.data.user_id == resource.data.user_id &&
+                       request.resource.data.book_title == resource.data.book_title &&
+                       isValidBookStat(request.resource.data);
+
+      // Only owner can delete their stats
+      allow delete: if isAuthenticated() && request.auth.uid == resource.data.user_id;
+    }
+
+    // 5. Following Groups collection
+    match /following_groups/{groupId} {
+      // Strictly owner-only read
+      allow read: if isAuthenticated() && request.auth.uid == resource.data.user_id;
+
+      // Only owner can create following groups
+      allow create: if isAuthenticated() &&
+                       request.auth.uid == request.resource.data.user_id &&
+                       isValidFollowingGroup(request.resource.data);
+
+      // Only owner can update; user_id is immutable
+      allow update: if isAuthenticated() &&
+                       request.auth.uid == resource.data.user_id &&
+                       request.resource.data.user_id == resource.data.user_id &&
+                       isValidFollowingGroup(request.resource.data);
+
+      // Only owner can delete their following groups
+      allow delete: if isAuthenticated() && request.auth.uid == resource.data.user_id;
+    }
+
+    // 6. Default Deny for all other collections and subcollections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
