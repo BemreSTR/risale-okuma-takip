@@ -64,20 +64,6 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    function isValidEmail(email) {
-      return email is string &&
-             email.size() >= 3 &&
-             email.size() <= 254 &&
-             email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
-    }
-
-    function isValidPublicId(publicId) {
-      return publicId is string &&
-             publicId.size() >= 6 &&
-             publicId.size() <= 30 &&
-             publicId.matches('^[A-Za-z0-9_-]+$');
-    }
-
     function isValidIsoTimestamp(str) {
       return str is string &&
              str.size() >= 10 &&
@@ -99,13 +85,16 @@ service cloud.firestore {
              data.keys().hasAll(['id', 'name', 'email', 'public_id', 'created_at']) &&
              data.id is string &&
              data.id == userId &&
-             data.id == request.auth.uid &&
+             request.auth.uid == userId &&
              data.name is string &&
              data.name.size() >= 1 &&
              data.name.size() <= 100 &&
-             isValidEmail(data.email) &&
-             isValidPublicId(data.public_id) &&
-             isValidIsoTimestamp(data.created_at);
+             data.email is string &&
+             data.email.size() <= 254 &&
+             data.public_id is string &&
+             data.public_id.size() >= 4 &&
+             data.public_id.size() <= 32 &&
+             data.created_at is string;
     }
 
     function isValidBook(data) {

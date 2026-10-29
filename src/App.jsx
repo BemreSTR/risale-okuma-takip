@@ -14,13 +14,14 @@ import {
   where,
   getDoc,
   getDocs,
+  setDoc,
   addDoc,
   updateDoc,
   deleteDoc,
   onSnapshot,
   limit
 } from 'firebase/firestore'
-import { validatePagesInput, validateName, getTodayStr } from './utils/helpers'
+import { validatePagesInput, validateName, generatePublicId, getTodayStr } from './utils/helpers'
 
 // Pages
 import AuthView from './pages/AuthView'
@@ -69,11 +70,24 @@ export default function App() {
   const [newNameInput, setNewNameInput] = useState('')
 
   // Fetch User Profile
-  const fetchUserProfile = async (uid) => {
+  const fetchUserProfile = async (user) => {
     try {
-      const userDoc = await getDoc(doc(db, 'users', uid))
+      const userRef = doc(db, 'users', user.uid)
+      const userDoc = await getDoc(userRef)
       if (userDoc.exists()) {
         setUserProfile(userDoc.data())
+      } else {
+        // Eğer kullanıcı Firestore dokümanı henüz oluşmadıysa otomatik oluştur
+        const candidateId = generatePublicId()
+        const newProfile = {
+          id: user.uid,
+          name: user.displayName || 'Okuyucu',
+          email: user.email || '',
+          public_id: candidateId,
+          created_at: new Date().toISOString()
+        }
+        await setDoc(userRef, newProfile)
+        setUserProfile(newProfile)
       }
     } catch (err) {
       console.error('Kullanıcı profili alınamadı:', err)
@@ -85,7 +99,7 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user)
       if (user) {
-        await fetchUserProfile(user.uid)
+        await fetchUserProfile(user)
       } else {
         setUserProfile(null)
         setMyBooks([])
