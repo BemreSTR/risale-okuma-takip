@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import PwaInstallCard from '@/components/PwaInstallCard'
 
-export default function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, requestNotifPermission, notifPermission, onEditName }) {
+export default function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, requestNotifPermission, notifPermission, onEditName, onTestNotification }) {
   // Hatim Calculation - Lowest count of all 14 books
   const hatimCount = Math.min(...RISALE_BOOKS.map((title) => finishedStats[title] || 0))
 
@@ -112,9 +112,19 @@ export default function ProfileView({ finishedStats, onShowHatimler, publicId, n
               Etkinleştir
             </Button>
           ) : (
-            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-50 text-teal-600 rounded-xl text-[10px] font-black uppercase tracking-wider">
-              <div className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse" />
-              Aktif
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onTestNotification}
+                className="h-8 px-2.5 text-xs text-slate-600 hover:text-teal-700 hover:border-teal-300 rounded-lg"
+              >
+                Test Et
+              </Button>
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-teal-50 text-teal-600 rounded-xl text-[10px] font-black uppercase tracking-wider">
+                <div className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse" />
+                Aktif
+              </div>
             </div>
           )}
         </div>

@@ -22,6 +22,11 @@ import {
   limit
 } from 'firebase/firestore'
 import { validatePagesInput, validateName, generatePublicId, getTodayStr } from './utils/helpers'
+import {
+  getNotificationPermission,
+  requestNotificationPermission,
+  showLocalNotification
+} from './utils/notifications'
 
 // Pages
 import AuthView from './pages/AuthView'
@@ -65,7 +70,7 @@ export default function App() {
   const [selectedBook, setSelectedBook] = useState(null)
   const [pagesInput, setPagesInput] = useState('')
   const [dateInput, setDateInput] = useState('')
-  const [notifPermission, setNotifPermission] = useState(typeof Notification !== 'undefined' ? Notification.permission : 'default')
+  const [notifPermission, setNotifPermission] = useState(getNotificationPermission)
   const [editNameModal, setEditNameModal] = useState(false)
   const [newNameInput, setNewNameInput] = useState('')
 
@@ -114,29 +119,56 @@ export default function App() {
 
   // 1.5 Bildirim Hatırlatıcı (21:00)
   useEffect(() => {
-    if (notifPermission === 'granted') {
-      const interval = setInterval(() => {
-        const now = new Date()
-        if (now.getHours() === 21 && now.getMinutes() === 0) {
-          const today = new Date().toISOString().split('T')[0]
-          const hasReadToday = logs && logs[today] && logs[today].length > 0
+    if (notifPermission !== 'granted') return
 
-          if (!hasReadToday) {
-            new Notification('Risale-i Nur Takip', {
-              body: 'Bugün biraz rızıklanmak ister misin? ✨ Okumayı unutma.',
-              icon: '/icon-192.png'
-            })
+    const checkAndNotify = async () => {
+      const now = new Date()
+      // 21:00 veya sonrasında henüz okunmadıysa ve bugün bildirim gitmediyse
+      if (now.getHours() >= 21) {
+        const today = getTodayStr()
+        const hasReadToday = logs && logs[today] && logs[today].length > 0
+        const lastNotifDate = localStorage.getItem('last_notif_date')
+
+        if (!hasReadToday && lastNotifDate !== today) {
+          const shown = await showLocalNotification('Risale-i Nur Takip', {
+            body: 'Bugün biraz rızıklanmak ister misin? ✨ Okumayı unutma.'
+          })
+          if (shown) {
+            localStorage.setItem('last_notif_date', today)
           }
         }
-      }, 60000)
-      return () => clearInterval(interval)
+      }
     }
+
+    checkAndNotify()
+    const interval = setInterval(checkAndNotify, 60000)
+    return () => clearInterval(interval)
   }, [notifPermission, logs])
 
   const requestNotifPermission = async () => {
-    if (typeof Notification !== 'undefined') {
-      const permission = await Notification.requestPermission()
+    const permission = await requestNotificationPermission()
+    setNotifPermission(permission)
+    if (permission === 'granted') {
+      await showLocalNotification('Risale-i Nur Takip', {
+        body: 'Akşam hatırlatmaları aktif! Saat 21:00\'de bildirim alacaksınız. ✨'
+      })
+    }
+  }
+
+  const handleTestNotification = async () => {
+    if (notifPermission !== 'granted') {
+      const permission = await requestNotificationPermission()
       setNotifPermission(permission)
+      if (permission !== 'granted') {
+        alert('Bildirim izni verilmedi. Lütfen tarayıcı veya cihaz ayarlarından bildirimlere izin verin.')
+        return
+      }
+    }
+    const success = await showLocalNotification('Risale-i Nur Takip (Test)', {
+      body: 'Harika! Telefonunuza bildirimler başarıyla ulaşıyor. 🔔'
+    })
+    if (!success) {
+      alert('Bildirim gösterilemedi. Lütfen bildirim izinlerinizi kontrol edin.')
     }
   }
 
@@ -485,6 +517,7 @@ export default function App() {
               name={userProfile?.name || currentUser.displayName || 'Misafir'}
               onLogout={handleLogout}
               requestNotifPermission={requestNotifPermission}
+              onTestNotification={handleTestNotification}
               notifPermission={notifPermission}
               onEditName={() => {
                 setNewNameInput(userProfile?.name || currentUser.displayName || '')
