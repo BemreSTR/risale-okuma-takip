@@ -9,6 +9,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // https://vite.dev/config/
 export default defineConfig({
   base: '/risale-okuma-takip/',
+  test: {
+    globals: true,
+    environment: 'happy-dom',
+    setupFiles: './src/test/setup.js'
+  },
   plugins: [
     react(),
     VitePWA({
