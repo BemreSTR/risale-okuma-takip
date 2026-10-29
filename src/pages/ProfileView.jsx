@@ -2,6 +2,7 @@ import { CheckCircle, ArrowRight, Bell, BellOff, Pencil } from 'lucide-react'
 import { RISALE_BOOKS } from '../constants'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import PwaInstallCard from '@/components/PwaInstallCard'
 
 export default function ProfileView({ finishedStats, onShowHatimler, publicId, name, onLogout, requestNotifPermission, notifPermission, onEditName }) {
   // Hatim Calculation - Lowest count of all 14 books
@@ -118,6 +119,9 @@ export default function ProfileView({ finishedStats, onShowHatimler, publicId, n
           )}
         </div>
       </Card>
+
+      {/* PWA / Add to Home Screen Card */}
+      <PwaInstallCard />
 
       <div className="text-center pt-2">
         <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest leading-loose">
