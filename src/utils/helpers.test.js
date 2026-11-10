@@ -4,7 +4,12 @@ import {
   validatePagesInput,
   validateName,
   validatePassword,
-  generatePublicId
+  generatePublicId,
+  validateDateInput,
+  getReadingLogDocId,
+  getBookStatDocId,
+  isLogAfterReset,
+  calculateBookProgress
 } from './helpers'
 
 describe('helpers.js - Utility Functions', () => {
@@ -104,6 +109,54 @@ describe('helpers.js - Utility Functions', () => {
       const id3 = generatePublicId()
       const set = new Set([id1, id2, id3])
       expect(set.size).toBe(3)
+    })
+  })
+
+  describe('validateDateInput', () => {
+    it('should accept valid YYYY-MM-DD calendar dates', () => {
+      expect(validateDateInput('2026-11-10')).toEqual({ valid: true, value: '2026-11-10' })
+      expect(validateDateInput('2024-02-29')).toEqual({ valid: true, value: '2024-02-29' })
+    })
+
+    it('should reject empty or malformed dates', () => {
+      expect(validateDateInput('').valid).toBe(false)
+      expect(validateDateInput('2026/11/10').valid).toBe(false)
+      expect(validateDateInput(null).valid).toBe(false)
+    })
+
+    it('should reject impossible calendar dates like Feb 30', () => {
+      expect(validateDateInput('2026-02-30').valid).toBe(false)
+      expect(validateDateInput('2025-02-29').valid).toBe(false)
+      expect(validateDateInput('2026-13-01').valid).toBe(false)
+    })
+  })
+
+  describe('deterministic document IDs', () => {
+    it('should generate deterministic reading log and stat IDs', () => {
+      expect(getReadingLogDocId('uid1', 'book1', '2026-11-10')).toBe('uid1_book1_2026-11-10')
+      expect(getBookStatDocId('uid1', 'Sözler')).toBe('uid1_S%C3%B6zler')
+    })
+  })
+
+  describe('isLogAfterReset & calculateBookProgress', () => {
+    it('should filter logs around reset timestamp including same-day timestamps', () => {
+      const resetIso = '2026-11-10T12:00:00.000Z'
+      expect(isLogAfterReset({ date: '2026-11-09', created_at: '2026-11-09T20:00:00.000Z' }, resetIso)).toBe(false)
+      expect(isLogAfterReset({ date: '2026-11-10', created_at: '2026-11-10T10:00:00.000Z' }, resetIso)).toBe(false)
+      expect(isLogAfterReset({ date: '2026-11-10', created_at: '2026-11-10T15:00:00.000Z' }, resetIso)).toBe(true)
+      expect(isLogAfterReset({ date: '2026-11-11', created_at: '2026-11-11T08:00:00.000Z' }, resetIso)).toBe(true)
+    })
+
+    it('should calculate book progress accurately from logs map', () => {
+      const book = { id: 'b1', last_reset: '2026-11-05T10:00:00.000Z' }
+      const logs = {
+        '2026-11-04': [{ book_id: 'b1', amount: 30, date: '2026-11-04', created_at: '2026-11-04T09:00:00Z' }],
+        '2026-11-06': [
+          { book_id: 'b1', amount: 15, date: '2026-11-06', created_at: '2026-11-06T09:00:00Z' },
+          { book_id: 'b2', amount: 40, date: '2026-11-06', created_at: '2026-11-06T09:00:00Z' }
+        ]
+      }
+      expect(calculateBookProgress(book, logs)).toBe(15)
     })
   })
 })

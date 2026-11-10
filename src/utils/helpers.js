@@ -43,3 +43,72 @@ export const generatePublicId = () => {
     const r2 = Math.floor(Math.random() * 9000 + 1000);
     return `TR${r1}X${r2}`;
 };
+
+/**
+ * YYYY-MM-DD formatında geçerli takvim tarihi doğrulaması
+ */
+export const validateDateInput = (dateStr) => {
+  if (typeof dateStr !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return { valid: false, error: 'Lütfen geçerli bir tarih seçiniz' }
+  }
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  const isRealDate =
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  if (!isRealDate) {
+    return { valid: false, error: 'Geçersiz takvim tarihi' }
+  }
+  return { valid: true, value: dateStr }
+}
+
+/**
+ * Kullanıcı, kitap ve gün bazlı tekil okuma kaydı doküman ID'si üretir
+ */
+export const getReadingLogDocId = (uid, bookId, dateStr) => `${uid}_${bookId}_${dateStr}`
+
+/**
+ * Kullanıcı ve kitap adına göre tekil hatim istatistiği doküman ID'si üretir
+ */
+export const getBookStatDocId = (uid, bookTitle) => `${uid}_${encodeURIComponent(bookTitle)}`
+
+/**
+ * Okuma kaydının son kitap bitirme (reset) zamanından sonra olup olmadığını kontrol eder
+ */
+export const isLogAfterReset = (log, lastReset) => {
+  if (!lastReset) return true
+  const resetTime = new Date(lastReset).getTime()
+  if (Number.isNaN(resetTime)) return true
+
+  if (log.date) {
+    const resetDateStr = lastReset.split('T')[0]
+    if (log.date < resetDateStr) return false
+    if (log.date > resetDateStr) return true
+    if (log.created_at) {
+      const createdTime = new Date(log.created_at).getTime()
+      if (!Number.isNaN(createdTime)) return createdTime > resetTime
+    }
+    return false
+  }
+
+  if (log.created_at) {
+    const createdTime = new Date(log.created_at).getTime()
+    return Number.isNaN(createdTime) ? true : createdTime > resetTime
+  }
+
+  return true
+}
+
+/**
+ * Bir kitabın mevcut turdaki toplam okunan sayfasını loglardan hesaplar
+ */
+export const calculateBookProgress = (book, logs) => {
+  let total = 0
+  Object.values(logs || {}).flat().forEach((log) => {
+    if (log.book_id === book.id && isLogAfterReset(log, book.last_reset)) {
+      total += log.amount || 0
+    }
+  })
+  return total
+}
