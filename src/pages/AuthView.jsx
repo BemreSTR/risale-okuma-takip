@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { BookOpen, Mail, Lock, User as UserIcon, ArrowRight, Loader2, Info, Eye, EyeOff, CheckCircle, X } from 'lucide-react'
 import { auth, db } from '../firebase'
 import {
@@ -9,12 +9,12 @@ import {
 } from 'firebase/auth'
 import {
   doc,
-  setDoc,
   getDocs,
   query,
   collection,
   where,
-  limit
+  limit,
+  runTransaction
 } from 'firebase/firestore'
 import { validateName, validatePassword, generatePublicId } from '../utils/helpers'
 import { Button } from '@/components/ui/button'
@@ -45,8 +45,10 @@ export default function AuthView() {
 
   const [successMsg, setSuccessMsg] = useState('')
   const [authTab, setAuthTab] = useState('login')
+  const submitLockRef = useRef(false)
 
   const handleRegister = async () => {
+    if (submitLockRef.current) return
     if (!name || !email || !password) return setErrorMsg('Lütfen tüm alanları doldurunuz.')
 
     const nameValidation = validateName(name)
@@ -55,15 +57,19 @@ export default function AuthView() {
     const passwordValidation = validatePassword(password)
     if (!passwordValidation.valid) return setErrorMsg(passwordValidation.error)
 
+    submitLockRef.current = true
     setErrorMsg('')
     setLoading(true)
     try {
+      const trimmedName = name.trim()
+      const trimmedEmail = email.trim()
+
       // 1. Firebase Auth ile Kayıt
-      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password)
+      const userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, password)
       const user = userCredential.user
 
       // Profile güncelle (displayName)
-      await updateProfile(user, { displayName: name.trim() })
+      await updateProfile(user, { displayName: trimmedName })
 
       // 2. Benzersiz bir Public ID bulana kadar dene (Kullanıcı artık authenticated)
       let publicId = ''
@@ -85,13 +91,28 @@ export default function AuthView() {
         publicId = generatePublicId()
       }
 
-      // 3. Firestore'da users dokümanı oluştur
-      await setDoc(doc(db, 'users', user.uid), {
-        id: user.uid,
-        name: name.trim(),
-        email: email.trim(),
-        public_id: publicId,
-        created_at: new Date().toISOString()
+      // 3. Firestore'da users dokümanını transaction ile oluştur (race-condition güvenli)
+      const userRef = doc(db, 'users', user.uid)
+      await runTransaction(db, async (transaction) => {
+        const existingDoc = await transaction.get(userRef)
+        if (!existingDoc.exists()) {
+          transaction.set(userRef, {
+            id: user.uid,
+            name: trimmedName,
+            email: trimmedEmail,
+            public_id: publicId,
+            created_at: new Date().toISOString()
+          })
+        } else {
+          const data = existingDoc.data()
+          transaction.update(userRef, {
+            id: data.id,
+            name: trimmedName,
+            email: trimmedEmail,
+            public_id: data.public_id,
+            created_at: data.created_at
+          })
+        }
       })
     } catch (e) {
       let msg = 'Kayıt hatası.'
@@ -106,12 +127,15 @@ export default function AuthView() {
       }
       setErrorMsg(msg)
     } finally {
+      submitLockRef.current = false
       setLoading(false)
     }
   }
 
   const handleLogin = async () => {
+    if (submitLockRef.current) return
     if (!loginEmail || !loginPassword) return setErrorMsg('Lütfen bilgileri giriniz.')
+    submitLockRef.current = true
     setErrorMsg('')
     setLoading(true)
     try {
@@ -133,12 +157,15 @@ export default function AuthView() {
       }
       setErrorMsg(msg)
     } finally {
+      submitLockRef.current = false
       setLoading(false)
     }
   }
 
   const handleForgotPassword = async () => {
+    if (submitLockRef.current) return
     if (!loginEmail) return setErrorMsg('Sıfırlama linki için lütfen e-posta adresinizi giriniz.')
+    submitLockRef.current = true
     setErrorMsg('')
     setSuccessMsg('')
     setLoading(true)
@@ -158,6 +185,7 @@ export default function AuthView() {
       }
       setErrorMsg(msg)
     } finally {
+      submitLockRef.current = false
       setLoading(false)
     }
   }

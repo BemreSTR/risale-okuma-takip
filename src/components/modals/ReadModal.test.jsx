@@ -60,7 +60,32 @@ describe('ReadModal Component', () => {
 
     const saveButton = screen.getByText('Kaydet')
     fireEvent.click(saveButton)
-    expect(onSave).toHaveBeenCalled()
+    expect(onSave).toHaveBeenCalledTimes(1)
+  })
+
+  it('should disable submit and show loading state when isSaving is true', () => {
+    const onSave = vi.fn()
+
+    render(
+      <ReadModal
+        isOpen={true}
+        onClose={vi.fn()}
+        selectedBook={{ title: 'Şualar' }}
+        pagesInput="37"
+        setPagesInput={vi.fn()}
+        dateInput="2026-11-10"
+        setDateInput={vi.fn()}
+        onSave={onSave}
+        isSaving={true}
+        existingDayAmount={37}
+      />
+    )
+
+    expect(screen.getByText(/37 sayfa/)).toBeInTheDocument()
+    const saveButton = screen.getByText('Kaydediliyor...')
+    expect(saveButton).toBeDisabled()
+    fireEvent.click(saveButton)
+    expect(onSave).not.toHaveBeenCalled()
   })
 })
 

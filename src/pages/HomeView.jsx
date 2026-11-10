@@ -1,9 +1,19 @@
-import { Plus, CheckCircle, Trash2, BookOpen } from 'lucide-react';
-import { COLORS } from '../constants';
-import { Button } from "@/components/ui/button";
-import { Card, CardDescription } from "@/components/ui/card";
+import { Plus, CheckCircle, Trash2, BookOpen } from 'lucide-react'
+import { COLORS } from '../constants'
+import { Button } from '@/components/ui/button'
+import { Card, CardDescription } from '@/components/ui/card'
 
-export default function HomeView({ books, finishedStats, getBookProgress, onBookClick, onFinish, onRemove, onAddClick }) {
+export default function HomeView({
+  books,
+  finishedStats,
+  getBookProgress,
+  onBookClick,
+  onFinish,
+  onRemove,
+  onAddClick,
+  finishingBookId = null,
+  removingBookId = null
+}) {
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
@@ -30,6 +40,8 @@ export default function HomeView({ books, finishedStats, getBookProgress, onBook
                         const color = COLORS[index % COLORS.length];
                         const finishedCount = finishedStats[book.title] || 0;
                         const progress = getBookProgress(book);
+                        const isFinishing = finishingBookId === book.id
+                        const isRemoving = removingBookId === book.id
 
                         return (
                             <Card
@@ -50,8 +62,11 @@ export default function HomeView({ books, finishedStats, getBookProgress, onBook
                                             <div className="flex justify-between items-start">
                                                 <h3 className="font-bold text-lg text-slate-800 truncate mb-1">{book.title}</h3>
                                                 <button
+                                                    type="button"
+                                                    disabled={isRemoving}
                                                     onClick={(e) => onRemove(e, book.id)}
-                                                    className="p-1.5 text-slate-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-all ml-2"
+                                                    className="p-1.5 text-slate-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-all ml-2 disabled:opacity-40"
+                                                    title="Kitabı Kaldır"
                                                 >
                                                     <Trash2 size={16} />
                                                 </button>
@@ -81,11 +96,12 @@ export default function HomeView({ books, finishedStats, getBookProgress, onBook
                                         <Button
                                             variant="secondary"
                                             size="sm"
+                                            disabled={isFinishing}
                                             onClick={(e) => onFinish(e, book)}
                                             className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800 border-none font-bold text-xs h-9 px-4 rounded-xl shadow-sm transition-all active:scale-95"
                                         >
                                             <CheckCircle size={14} className="mr-2" />
-                                            Bitirdim
+                                            {isFinishing ? 'İşleniyor...' : 'Bitirdim'}
                                         </Button>
                                     </div>
                                 </div>

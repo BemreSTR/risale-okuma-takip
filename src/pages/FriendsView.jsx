@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Plus, X, ChevronRight, Trash2, Settings2, Pencil, Loader2 } from 'lucide-react'
 import { db } from '../firebase'
 import {
@@ -13,6 +13,11 @@ import {
   onSnapshot,
   limit
 } from 'firebase/firestore'
+import {
+  addMemberToGroup,
+  removeMemberFromGroup,
+  moveMemberBetweenGroups
+} from '../utils/readingService'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -24,10 +29,12 @@ function FriendDetailView({ friend, onBack }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let cancelled = false
     const fetchFriendLogs = async () => {
       try {
         const q = query(collection(db, 'reading_logs'), where('user_id', '==', friend.id))
         const snapshot = await getDocs(q)
+        if (cancelled) return
         const logsMap = {}
         snapshot.docs.forEach((docItem) => {
           const log = { id: docItem.id, ...docItem.data() }
@@ -39,10 +46,15 @@ function FriendDetailView({ friend, onBack }) {
       } catch (err) {
         console.error('Error fetching friend logs:', err)
       } finally {
-        setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+        }
       }
     }
     fetchFriendLogs()
+    return () => {
+      cancelled = true
+    }
   }, [friend])
 
   return (
@@ -82,6 +94,8 @@ export default function FriendsView({ userId }) {
 
   const [selectedFriend, setSelectedFriend] = useState(null)
   const [movingMember, setMovingMember] = useState(null)
+  const [submittingAction, setSubmittingAction] = useState(false)
+  const actionLockRef = useRef(false)
 
   useEffect(() => {
     if (!userId) return
@@ -107,11 +121,20 @@ export default function FriendsView({ userId }) {
   }, [userId])
 
   const handleAddGroup = async () => {
-    if (!groupNameInput.trim()) return
+    if (actionLockRef.current) return
+    const trimmedName = groupNameInput.trim()
+    if (!trimmedName) return
+    if (trimmedName.length > 100) {
+      alert('Grup adı 100 karakterden uzun olamaz.')
+      return
+    }
+
+    actionLockRef.current = true
+    setSubmittingAction(true)
     try {
       await addDoc(collection(db, 'following_groups'), {
         user_id: userId,
-        name: groupNameInput.trim(),
+        name: trimmedName,
         members: []
       })
       setGroupNameInput('')
@@ -119,15 +142,23 @@ export default function FriendsView({ userId }) {
     } catch (err) {
       console.error(err)
       alert('Grup eklenirken hata oluştu.')
+    } finally {
+      actionLockRef.current = false
+      setSubmittingAction(false)
     }
   }
 
   const handleAddMember = async () => {
-    if (!memberIdInput.trim()) return
+    if (actionLockRef.current) return
+    const normalizedId = memberIdInput.trim().toUpperCase()
+    if (!normalizedId || !activeGroupId) return
+
+    actionLockRef.current = true
+    setSubmittingAction(true)
     try {
       const q = query(
         collection(db, 'users'),
-        where('public_id', '==', memberIdInput.trim().toUpperCase()),
+        where('public_id', '==', normalizedId),
         limit(1)
       )
       const snapshot = await getDocs(q)
@@ -139,48 +170,65 @@ export default function FriendsView({ userId }) {
 
       const foundUser = snapshot.docs[0].data()
       const realMemberId = foundUser.id || snapshot.docs[0].id
-      const name = foundUser.name || `Öğrenci ${memberIdInput}`
+      const name = foundUser.name || `Öğrenci ${normalizedId}`
 
-      const targetGroup = groups.find((g) => g.id === activeGroupId)
-      if (!targetGroup) return
-      const currentMembers = targetGroup.members || []
+      const result = await addMemberToGroup(db, {
+        groupId: activeGroupId,
+        member: { id: realMemberId, name, public_id: foundUser.public_id }
+      })
 
-      if (currentMembers.find((m) => m.id === realMemberId)) {
+      if (!result.added && result.reason === 'already_exists') {
         alert('Zaten ekli.')
         return
       }
-
-      const newMembers = [...currentMembers, { id: realMemberId, name, public_id: foundUser.public_id }]
-      await updateDoc(doc(db, 'following_groups', activeGroupId), { members: newMembers })
 
       setMemberIdInput('')
       setActiveGroupId(null)
     } catch (err) {
       console.error(err)
-      alert('Üye eklenirken hata oluştu.')
+      alert(err?.message || 'Üye eklenirken hata oluştu.')
+    } finally {
+      actionLockRef.current = false
+      setSubmittingAction(false)
     }
   }
 
   const handleDeleteGroup = async (groupId) => {
+    if (actionLockRef.current) return
     if (!window.confirm('Bu grubu silmek istiyor musun?')) return
+    actionLockRef.current = true
     try {
       await deleteDoc(doc(db, 'following_groups', groupId))
     } catch (err) {
       console.error(err)
       alert('Grup silinirken hata oluştu.')
+    } finally {
+      actionLockRef.current = false
     }
   }
 
   const handleEditGroup = async () => {
-    if (!editGroupNameInput.trim() || !editingGroupId) return
+    if (actionLockRef.current) return
+    const trimmedName = editGroupNameInput.trim()
+    if (!trimmedName || !editingGroupId) return
+    if (trimmedName.length > 100) {
+      alert('Grup adı 100 karakterden uzun olamaz.')
+      return
+    }
+
+    actionLockRef.current = true
+    setSubmittingAction(true)
     try {
-      await updateDoc(doc(db, 'following_groups', editingGroupId), { name: editGroupNameInput.trim() })
+      await updateDoc(doc(db, 'following_groups', editingGroupId), { name: trimmedName })
       setShowEditGroup(false)
       setEditingGroupId(null)
       setEditGroupNameInput('')
     } catch (err) {
       console.error(err)
       alert('Grup düzenlenirken hata oluştu.')
+    } finally {
+      actionLockRef.current = false
+      setSubmittingAction(false)
     }
   }
 
@@ -191,38 +239,39 @@ export default function FriendsView({ userId }) {
   }
 
   const handleRemoveMember = async (groupId, member) => {
+    if (actionLockRef.current) return
     if (!window.confirm(`${member.name} isimli kişiyi gruptan çıkarmak istiyor musun?`)) return
+    actionLockRef.current = true
     try {
-      const group = groups.find((g) => g.id === groupId)
-      if (!group) return
-      const newMembers = (group.members || []).filter((m) => m.id !== member.id)
-      await updateDoc(doc(db, 'following_groups', groupId), { members: newMembers })
+      await removeMemberFromGroup(db, { groupId, memberId: member.id })
     } catch (err) {
       console.error(err)
       alert('Üye çıkarılırken hata oluştu.')
+    } finally {
+      actionLockRef.current = false
     }
   }
 
   const handleMoveMember = async (targetGroupId) => {
+    if (actionLockRef.current) return
     if (!movingMember || !targetGroupId) return
     const { member, currentGroupId } = movingMember
 
+    actionLockRef.current = true
+    setSubmittingAction(true)
     try {
-      const sourceGroup = groups.find((g) => g.id === currentGroupId)
-      const filteredMembers = (sourceGroup?.members || []).filter((m) => m.id !== member.id)
-
-      const targetGroup = groups.find((g) => g.id === targetGroupId)
-      const updatedTargetMembers = [...(targetGroup?.members || []), member]
-
-      await Promise.all([
-        updateDoc(doc(db, 'following_groups', currentGroupId), { members: filteredMembers }),
-        updateDoc(doc(db, 'following_groups', targetGroupId), { members: updatedTargetMembers })
-      ])
-
+      await moveMemberBetweenGroups(db, {
+        sourceGroupId: currentGroupId,
+        targetGroupId,
+        member
+      })
       setMovingMember(null)
     } catch (err) {
       console.error(err)
-      alert('Üye taşınırken hata oluştu.')
+      alert(err?.message || 'Üye taşınırken hata oluştu.')
+    } finally {
+      actionLockRef.current = false
+      setSubmittingAction(false)
     }
   }
 
@@ -341,11 +390,11 @@ export default function FriendsView({ userId }) {
 
       {/* Modals */}
       {showAddGroup && (
-        <div className="modal-overlay" onClick={() => setShowAddGroup(false)}>
+        <div className="modal-overlay" onClick={() => !submittingAction && setShowAddGroup(false)}>
           <Card className="w-[90%] max-w-sm p-6 animate-in slide-in-from-bottom-5 duration-300" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-bold">Yeni Grup Oluştur</h3>
-              <button onClick={() => setShowAddGroup(false)} className="text-slate-400"><X size={20} /></button>
+              <button type="button" disabled={submittingAction} onClick={() => setShowAddGroup(false)} className="text-slate-400"><X size={20} /></button>
             </div>
             <div className="space-y-4">
               <div className="space-y-1.5">
@@ -356,21 +405,24 @@ export default function FriendsView({ userId }) {
                   onChange={(e) => setGroupNameInput(e.target.value)}
                   placeholder="örn: Liseli Talebeler"
                   autoFocus
+                  disabled={submittingAction}
                   className="text-left h-11"
                 />
               </div>
-              <Button className="w-full h-11" onClick={handleAddGroup}>Oluştur</Button>
+              <Button disabled={submittingAction} className="w-full h-11" onClick={handleAddGroup}>
+                {submittingAction ? 'Oluşturuluyor...' : 'Oluştur'}
+              </Button>
             </div>
           </Card>
         </div>
       )}
 
       {showEditGroup && (
-        <div className="modal-overlay" onClick={() => { setShowEditGroup(false); setEditingGroupId(null); setEditGroupNameInput('') }}>
+        <div className="modal-overlay" onClick={() => { if (!submittingAction) { setShowEditGroup(false); setEditingGroupId(null); setEditGroupNameInput('') } }}>
           <Card className="w-[90%] max-w-sm p-6 animate-in slide-in-from-bottom-5 duration-300" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-bold">Grubu Düzenle</h3>
-              <button onClick={() => { setShowEditGroup(false); setEditingGroupId(null); setEditGroupNameInput('') }} className="text-slate-400"><X size={20} /></button>
+              <button type="button" disabled={submittingAction} onClick={() => { setShowEditGroup(false); setEditingGroupId(null); setEditGroupNameInput('') }} className="text-slate-400"><X size={20} /></button>
             </div>
             <div className="space-y-4">
               <div className="space-y-1.5">
@@ -381,21 +433,24 @@ export default function FriendsView({ userId }) {
                   onChange={(e) => setEditGroupNameInput(e.target.value)}
                   placeholder="Grup Adı"
                   autoFocus
+                  disabled={submittingAction}
                   className="text-left h-11"
                 />
               </div>
-              <Button className="w-full h-11" onClick={handleEditGroup}>Kaydet</Button>
+              <Button disabled={submittingAction} className="w-full h-11" onClick={handleEditGroup}>
+                {submittingAction ? 'Kaydediliyor...' : 'Kaydet'}
+              </Button>
             </div>
           </Card>
         </div>
       )}
 
       {activeGroupId && (
-        <div className="modal-overlay" onClick={() => setActiveGroupId(null)}>
+        <div className="modal-overlay" onClick={() => !submittingAction && setActiveGroupId(null)}>
           <Card className="w-[90%] max-w-sm p-6 animate-in slide-in-from-bottom-5 duration-300" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-bold">Talebe Ekle</h3>
-              <button onClick={() => setActiveGroupId(null)} className="text-slate-400"><X size={20} /></button>
+              <button type="button" disabled={submittingAction} onClick={() => setActiveGroupId(null)} className="text-slate-400"><X size={20} /></button>
             </div>
             <p className="text-sm text-slate-500 mb-6 leading-relaxed">Eklemek istediğin kişinin profilindeki benzersiz <b>Kullanıcı ID</b>'sini (örn: TR1234X5678) gir.</p>
             <div className="space-y-4">
@@ -407,21 +462,24 @@ export default function FriendsView({ userId }) {
                   onChange={(e) => setMemberIdInput(e.target.value)}
                   placeholder="TR...."
                   autoFocus
+                  disabled={submittingAction}
                   className="text-left h-11 tracking-wider font-mono font-bold uppercase"
                 />
               </div>
-              <Button className="w-full h-11" onClick={handleAddMember}>Gruba Ekle</Button>
+              <Button disabled={submittingAction} className="w-full h-11" onClick={handleAddMember}>
+                {submittingAction ? 'Ekleniyor...' : 'Gruba Ekle'}
+              </Button>
             </div>
           </Card>
         </div>
       )}
 
       {movingMember && (
-        <div className="modal-overlay" onClick={() => setMovingMember(null)}>
+        <div className="modal-overlay" onClick={() => !submittingAction && setMovingMember(null)}>
           <Card className="w-[90%] max-w-sm p-6 animate-in slide-in-from-bottom-5 duration-300" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-bold">Grubu Değiştir</h3>
-              <button onClick={() => setMovingMember(null)} className="text-slate-400"><X size={20} /></button>
+              <button type="button" disabled={submittingAction} onClick={() => setMovingMember(null)} className="text-slate-400"><X size={20} /></button>
             </div>
             <p className="text-sm text-slate-500 mb-6">
               <span className="font-bold text-slate-700">{movingMember.member.name}</span> isimli kişiyi hangi gruba taşımak istiyorsun?
@@ -431,8 +489,10 @@ export default function FriendsView({ userId }) {
                 groups.filter((g) => g.id !== movingMember.currentGroupId).map((group) => (
                   <button
                     key={group.id}
+                    type="button"
+                    disabled={submittingAction}
                     onClick={() => handleMoveMember(group.id)}
-                    className="w-full text-left p-4 rounded-xl border border-slate-200 hover:border-teal-500 hover:bg-teal-50/30 transition-all font-medium text-slate-700"
+                    className="w-full text-left p-4 rounded-xl border border-slate-200 hover:border-teal-500 hover:bg-teal-50/30 transition-all font-medium text-slate-700 disabled:opacity-50"
                   >
                     {group.name}
                   </button>

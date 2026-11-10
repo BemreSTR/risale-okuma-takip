@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './index.css'
 import { auth, db } from './firebase'
 import {
@@ -12,16 +12,26 @@ import {
   doc,
   query,
   where,
-  getDoc,
-  getDocs,
-  setDoc,
-  addDoc,
   updateDoc,
   deleteDoc,
   onSnapshot,
-  limit
+  runTransaction
 } from 'firebase/firestore'
-import { validatePagesInput, validateName, generatePublicId, getTodayStr } from './utils/helpers'
+import {
+  validatePagesInput,
+  validateDateInput,
+  validateName,
+  generatePublicId,
+  getTodayStr,
+  calculateBookProgress
+} from './utils/helpers'
+import {
+  saveReadingLog,
+  deleteReadingLog,
+  addBookIfMissing,
+  finishBookTransaction,
+  saveHatimCountTransaction
+} from './utils/readingService'
 import {
   getNotificationPermission,
   requestNotificationPermission,
@@ -61,6 +71,7 @@ export default function App() {
   const [myBooks, setMyBooks] = useState([])
   const [finishedStats, setFinishedStats] = useState({})
   const [logs, setLogs] = useState({})
+  const [logsLoaded, setLogsLoaded] = useState(false)
 
   // UI States
   const [readModalOpen, setReadModalOpen] = useState(false)
@@ -74,42 +85,36 @@ export default function App() {
   const [editNameModal, setEditNameModal] = useState(false)
   const [newNameInput, setNewNameInput] = useState('')
 
-  // Fetch User Profile
-  const fetchUserProfile = async (user) => {
-    try {
-      const userRef = doc(db, 'users', user.uid)
-      const userDoc = await getDoc(userRef)
-      if (userDoc.exists()) {
-        setUserProfile(userDoc.data())
-      } else {
-        // Eğer kullanıcı Firestore dokümanı henüz oluşmadıysa otomatik oluştur
-        const candidateId = generatePublicId()
-        const newProfile = {
-          id: user.uid,
-          name: user.displayName || 'Okuyucu',
-          email: user.email || '',
-          public_id: candidateId,
-          created_at: new Date().toISOString()
-        }
-        await setDoc(userRef, newProfile)
-        setUserProfile(newProfile)
-      }
-    } catch (err) {
-      console.error('Kullanıcı profili alınamadı:', err)
-    }
-  }
+  // Async action loading & concurrency locks
+  const [isSavingReading, setIsSavingReading] = useState(false)
+  const [deletingLogId, setDeletingLogId] = useState(null)
+  const [isAddingBook, setIsAddingBook] = useState(false)
+  const [finishingBookId, setFinishingBookId] = useState(null)
+  const [removingBookId, setRemovingBookId] = useState(null)
+  const [isUpdatingName, setIsUpdatingName] = useState(false)
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false)
+  const [isSavingHatim, setIsSavingHatim] = useState(false)
+
+  const saveReadingLockRef = useRef(false)
+  const deleteLogLockRef = useRef(new Set())
+  const addBookLockRef = useRef(false)
+  const finishBookLockRef = useRef(new Set())
+  const removeBookLockRef = useRef(new Set())
+  const updateNameLockRef = useRef(false)
+  const updatePasswordLockRef = useRef(false)
+  const saveHatimLockRef = useRef(false)
+  const notifLockRef = useRef(false)
 
   // 1. Auth Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user)
-      if (user) {
-        await fetchUserProfile(user)
-      } else {
+      if (!user) {
         setUserProfile(null)
         setMyBooks([])
         setFinishedStats({})
         setLogs({})
+        setLogsLoaded(false)
       }
       setLoadingAuth(false)
     })
@@ -117,11 +122,71 @@ export default function App() {
     return () => unsubscribe()
   }, [])
 
+  // 1.2 User Profile Realtime Listener & Race-Free Auto-Heal
+  useEffect(() => {
+    if (!currentUser) return
+
+    const userRef = doc(db, 'users', currentUser.uid)
+    let autoHealTimer = null
+    let healingAttempted = false
+
+    const ensureProfileTransaction = async () => {
+      if (healingAttempted) return
+      healingAttempted = true
+      try {
+        await runTransaction(db, async (transaction) => {
+          const snap = await transaction.get(userRef)
+          if (!snap.exists()) {
+            const activeUser = auth.currentUser || currentUser
+            transaction.set(userRef, {
+              id: currentUser.uid,
+              name: activeUser.displayName || 'Okuyucu',
+              email: activeUser.email || '',
+              public_id: generatePublicId(),
+              created_at: new Date().toISOString()
+            })
+          }
+        })
+      } catch (err) {
+        console.error('Kullanıcı profili alınamadı:', err)
+      }
+    }
+
+    const unsubProfile = onSnapshot(userRef, (snapshot) => {
+      if (snapshot.exists()) {
+        if (autoHealTimer) {
+          clearTimeout(autoHealTimer)
+          autoHealTimer = null
+        }
+        setUserProfile(snapshot.data())
+      } else if (!snapshot.metadata.fromCache || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+        const createdMs = currentUser.metadata?.creationTime
+          ? new Date(currentUser.metadata.creationTime).getTime()
+          : 0
+        const isBrandNew = createdMs > 0 && Date.now() - createdMs < 5000
+
+        if (isBrandNew) {
+          if (!autoHealTimer) {
+            autoHealTimer = setTimeout(ensureProfileTransaction, 3000)
+          }
+        } else {
+          ensureProfileTransaction()
+        }
+      }
+    })
+
+    return () => {
+      if (autoHealTimer) clearTimeout(autoHealTimer)
+      unsubProfile()
+    }
+  }, [currentUser])
+
   // 1.5 Bildirim Hatırlatıcı (21:00)
   useEffect(() => {
-    if (notifPermission !== 'granted') return
+    if (!currentUser || !logsLoaded || notifPermission !== 'granted') return
 
     const checkAndNotify = async () => {
+      if (notifLockRef.current) return
       const now = new Date()
       // 21:00 veya sonrasında henüz okunmadıysa ve bugün bildirim gitmediyse
       if (now.getHours() >= 21) {
@@ -130,11 +195,16 @@ export default function App() {
         const lastNotifDate = localStorage.getItem('last_notif_date')
 
         if (!hasReadToday && lastNotifDate !== today) {
-          const shown = await showLocalNotification('Risale-i Nur Takip', {
-            body: 'Bugün biraz rızıklanmak ister misin? ✨ Okumayı unutma.'
-          })
-          if (shown) {
-            localStorage.setItem('last_notif_date', today)
+          notifLockRef.current = true
+          try {
+            const shown = await showLocalNotification('Risale-i Nur Takip', {
+              body: 'Bugün biraz rızıklanmak ister misin? ✨ Okumayı unutma.'
+            })
+            if (shown) {
+              localStorage.setItem('last_notif_date', today)
+            }
+          } finally {
+            notifLockRef.current = false
           }
         }
       }
@@ -143,7 +213,7 @@ export default function App() {
     checkAndNotify()
     const interval = setInterval(checkAndNotify, 60000)
     return () => clearInterval(interval)
-  }, [notifPermission, logs])
+  }, [currentUser, logsLoaded, notifPermission, logs])
 
   const requestNotifPermission = async () => {
     const permission = await requestNotificationPermission()
@@ -209,6 +279,7 @@ export default function App() {
         logsMap[log.date].push(log)
       })
       setLogs(logsMap)
+      setLogsLoaded(true)
     })
 
     return () => {
@@ -221,22 +292,7 @@ export default function App() {
   // Helpers
   const getUserId = () => currentUser?.uid
 
-  const getBookProgress = (book) => {
-    let total = 0
-    Object.values(logs).flat().forEach((log) => {
-      if (log.book_id === book.id) {
-        let logTime = new Date(log.created_at).getTime()
-        if (log.date) logTime = new Date(log.date).getTime()
-
-        if (book.last_reset) {
-          const resetTime = new Date(book.last_reset).getTime()
-          if (logTime <= resetTime) return
-        }
-        total += log.amount
-      }
-    })
-    return total
-  }
+  const getBookProgress = (book) => calculateBookProgress(book, logs)
 
   const handleBookClick = (book) => {
     setSelectedBook(book)
@@ -246,94 +302,79 @@ export default function App() {
   }
 
   const handleSaveReading = async () => {
+    if (saveReadingLockRef.current) return
+
     const validation = validatePagesInput(pagesInput)
     if (!validation.valid) {
       alert(validation.error)
       return
     }
-    const amount = validation.value
+    const dateValidation = validateDateInput(dateInput)
+    if (!dateValidation.valid) {
+      alert(dateValidation.error)
+      return
+    }
     const uid = getUserId()
     if (!uid || !selectedBook) return
 
+    saveReadingLockRef.current = true
+    setIsSavingReading(true)
     try {
-      const logsQuery = query(
-        collection(db, 'reading_logs'),
-        where('user_id', '==', uid),
-        where('book_id', '==', selectedBook.id),
-        where('date', '==', dateInput),
-        limit(1)
-      )
-      const existingLogs = await getDocs(logsQuery)
-
-      let diff = amount
-
-      if (!existingLogs.empty) {
-        const oldDoc = existingLogs.docs[0]
-        const oldLog = oldDoc.data()
-        diff = amount - oldLog.amount
-        await updateDoc(doc(db, 'reading_logs', oldDoc.id), { amount: amount })
-      } else {
-        await addDoc(collection(db, 'reading_logs'), {
-          user_id: uid,
-          book_id: selectedBook.id,
-          title: selectedBook.title,
-          amount: amount,
-          date: dateInput,
-          created_at: new Date().toISOString()
-        })
-      }
-
-      const bookRef = doc(db, 'books', selectedBook.id)
-      const bookSnap = await getDoc(bookRef)
-      const currentPages = bookSnap.exists() ? (bookSnap.data().current_pages || 0) : 0
-      const newTotal = currentPages + diff
-      await updateDoc(bookRef, { current_pages: newTotal })
-
+      await saveReadingLog(db, {
+        uid,
+        book: selectedBook,
+        amount: validation.value,
+        dateInput: dateValidation.value
+      })
       setReadModalOpen(false)
     } catch (err) {
       console.error(err)
       alert('Hata oluştu.')
+    } finally {
+      saveReadingLockRef.current = false
+      setIsSavingReading(false)
+    }
+  }
+
+  const handleDeleteLog = async (log) => {
+    if (!log?.id || deleteLogLockRef.current.has(log.id)) return
+    if (!window.confirm(`${log.title} (${log.amount} sayfa) okuma kaydını silmek istediğine emin misin?`)) return
+
+    deleteLogLockRef.current.add(log.id)
+    setDeletingLogId(log.id)
+    try {
+      await deleteReadingLog(db, log)
+    } catch (err) {
+      console.error(err)
+      alert('Okuma kaydı silinemedi.')
+    } finally {
+      deleteLogLockRef.current.delete(log.id)
+      setDeletingLogId((prev) => (prev === log.id ? null : prev))
     }
   }
 
   const handleFinishBook = async (e, book) => {
     e.stopPropagation()
+    if (finishBookLockRef.current.has(book.id)) return
     if (!window.confirm(`${book.title} kitabını bitirdiğini onaylıyor musun? Sayaç sıfırlanacak.`)) return
     const uid = getUserId()
     if (!uid) return
 
+    finishBookLockRef.current.add(book.id)
+    setFinishingBookId(book.id)
     try {
-      const statsQuery = query(
-        collection(db, 'book_stats'),
-        where('user_id', '==', uid),
-        where('book_title', '==', book.title),
-        limit(1)
-      )
-      const snap = await getDocs(statsQuery)
-
-      if (!snap.empty) {
-        const statDoc = snap.docs[0]
-        const currentCount = statDoc.data().count || 0
-        await updateDoc(doc(db, 'book_stats', statDoc.id), { count: currentCount + 1 })
-      } else {
-        await addDoc(collection(db, 'book_stats'), {
-          user_id: uid,
-          book_title: book.title,
-          count: 1
-        })
-      }
-
-      await updateDoc(doc(db, 'books', book.id), {
-        current_pages: 0,
-        last_reset: new Date().toISOString()
-      })
+      await finishBookTransaction(db, { uid, book })
     } catch (err) {
       console.error(err)
       alert('Kitap bitirilemedi.')
+    } finally {
+      finishBookLockRef.current.delete(book.id)
+      setFinishingBookId((prev) => (prev === book.id ? null : prev))
     }
   }
 
   const handleAddBook = async (title) => {
+    if (addBookLockRef.current) return
     const existing = myBooks.find((b) => b.title === title)
     if (existing) {
       alert('Bu kitap zaten listenizde.')
@@ -345,29 +386,39 @@ export default function App() {
       return
     }
 
+    addBookLockRef.current = true
+    setIsAddingBook(true)
     try {
-      await addDoc(collection(db, 'books'), {
-        user_id: uid,
-        title: title,
-        current_pages: 0,
-        added_at: new Date().toISOString()
-      })
+      const result = await addBookIfMissing(db, { uid, title })
+      if (!result.added) {
+        alert('Bu kitap zaten listenizde.')
+        return
+      }
       setAddBookModalOpen(false)
     } catch (err) {
       console.error(err)
       alert('Kitap eklenirken bir hata oluştu.')
+    } finally {
+      addBookLockRef.current = false
+      setIsAddingBook(false)
     }
   }
 
   const handleRemoveBook = async (e, id) => {
     e.stopPropagation()
-    if (window.confirm('Bu kitabı listenden kaldırmak istediğine emin misin?')) {
-      try {
-        await deleteDoc(doc(db, 'books', id))
-      } catch (err) {
-        console.error(err)
-        alert('Kitap kaldırılamadı.')
-      }
+    if (removeBookLockRef.current.has(id)) return
+    if (!window.confirm('Bu kitabı listenden kaldırmak istediğine emin misin?')) return
+
+    removeBookLockRef.current.add(id)
+    setRemovingBookId(id)
+    try {
+      await deleteDoc(doc(db, 'books', id))
+    } catch (err) {
+      console.error(err)
+      alert('Kitap kaldırılamadı.')
+    } finally {
+      removeBookLockRef.current.delete(id)
+      setRemovingBookId((prev) => (prev === id ? null : prev))
     }
   }
 
@@ -378,29 +429,40 @@ export default function App() {
   }
 
   const handleUpdateName = async () => {
+    if (updateNameLockRef.current) return
     const validation = validateName(newNameInput)
     if (!validation.valid) {
       alert(validation.error)
       return
     }
+
+    updateNameLockRef.current = true
+    setIsUpdatingName(true)
     try {
       const uid = currentUser.uid
-      await updateProfile(currentUser, { displayName: newNameInput.trim() })
-      await updateDoc(doc(db, 'users', uid), { name: newNameInput.trim() })
-      setUserProfile((prev) => ({ ...prev, name: newNameInput.trim() }))
+      const trimmedName = newNameInput.trim()
+      await updateProfile(currentUser, { displayName: trimmedName })
+      await updateDoc(doc(db, 'users', uid), { name: trimmedName })
+      setUserProfile((prev) => ({ ...prev, name: trimmedName }))
       setEditNameModal(false)
     } catch (err) {
       console.error(err)
       alert('İsim güncellenirken hata oluştu.')
+    } finally {
+      updateNameLockRef.current = false
+      setIsUpdatingName(false)
     }
   }
 
   const handleUpdatePassword = async () => {
+    if (updatePasswordLockRef.current) return
     if (newPassword.length < 6) {
       alert('Şifre en az 6 karakter olmalıdır.')
       return
     }
 
+    updatePasswordLockRef.current = true
+    setIsUpdatingPassword(true)
     try {
       await updatePassword(currentUser, newPassword)
       alert('Şifreniz başarıyla güncellendi!')
@@ -414,41 +476,38 @@ export default function App() {
         message = 'Şifre çok zayıf. Daha güçlü bir şifre seçin.'
       }
       alert(message)
+    } finally {
+      updatePasswordLockRef.current = false
+      setIsUpdatingPassword(false)
     }
   }
 
   const handleSaveHatimCount = async () => {
+    if (saveHatimLockRef.current) return
     const count = parseInt(hatimCountInput)
     if (isNaN(count) || count < 0) return
     if (count > 1000) {
       alert("Hatim sayısı 1000'den büyük olamaz")
       return
     }
+    const uid = getUserId()
+    if (!uid || !selectedHatimBook) return
+
+    saveHatimLockRef.current = true
+    setIsSavingHatim(true)
     try {
-      const uid = getUserId()
-      if (!uid || !selectedHatimBook) return
-
-      const q = query(
-        collection(db, 'book_stats'),
-        where('user_id', '==', uid),
-        where('book_title', '==', selectedHatimBook),
-        limit(1)
-      )
-      const snap = await getDocs(q)
-
-      if (!snap.empty) {
-        await updateDoc(doc(db, 'book_stats', snap.docs[0].id), { count })
-      } else {
-        await addDoc(collection(db, 'book_stats'), {
-          user_id: uid,
-          book_title: selectedHatimBook,
-          count
-        })
-      }
+      await saveHatimCountTransaction(db, {
+        uid,
+        bookTitle: selectedHatimBook,
+        count
+      })
       setEditHatimModal(false)
     } catch (err) {
       console.error(err)
       alert('Hatim güncellenirken hata oluştu.')
+    } finally {
+      saveHatimLockRef.current = false
+      setIsSavingHatim(false)
     }
   }
 
@@ -481,6 +540,13 @@ export default function App() {
     return <AuthView />
   }
 
+  const existingDayAmount =
+    selectedBook && dateInput && logs[dateInput]
+      ? logs[dateInput]
+          .filter((log) => log.book_id === selectedBook.id)
+          .reduce((sum, log) => sum + (log.amount || 0), 0)
+      : null
+
   return (
     <div className="mobile-wrapper">
       <div className="content">
@@ -494,9 +560,17 @@ export default function App() {
             onFinish={handleFinishBook}
             onRemove={handleRemoveBook}
             onAddClick={() => setAddBookModalOpen(true)}
+            finishingBookId={finishingBookId}
+            removingBookId={removingBookId}
           />
         )}
-        {activeTab === 'calendar' && <CalendarView logs={logs} />}
+        {activeTab === 'calendar' && (
+          <CalendarView
+            logs={logs}
+            onDeleteLog={handleDeleteLog}
+            deletingLogId={deletingLogId}
+          />
+        )}
         {activeTab === 'friends' && <FriendsView userId={currentUser.uid} />}
         {activeTab === 'profile' && (
           showHatimler ? (
@@ -537,6 +611,7 @@ export default function App() {
         newNameInput={newNameInput}
         setNewNameInput={setNewNameInput}
         onSave={handleUpdateName}
+        isSaving={isUpdatingName}
       />
 
       <ReadModal
@@ -548,12 +623,15 @@ export default function App() {
         dateInput={dateInput}
         setDateInput={setDateInput}
         onSave={handleSaveReading}
+        isSaving={isSavingReading}
+        existingDayAmount={existingDayAmount}
       />
 
       <AddBookModal
         isOpen={addBookModalOpen}
         onClose={() => setAddBookModalOpen(false)}
         onAddBook={handleAddBook}
+        isSaving={isAddingBook}
       />
 
       <PasswordResetModal
@@ -562,6 +640,7 @@ export default function App() {
         newPassword={newPassword}
         setNewPassword={setNewPassword}
         onSave={handleUpdatePassword}
+        isSaving={isUpdatingPassword}
       />
 
       <HatimEditModal
@@ -571,6 +650,7 @@ export default function App() {
         hatimCountInput={hatimCountInput}
         setHatimCountInput={setHatimCountInput}
         onSave={handleSaveHatimCount}
+        isSaving={isSavingHatim}
       />
     </div>
   )

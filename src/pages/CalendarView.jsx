@@ -1,7 +1,7 @@
-import { useState } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { useState } from 'react'
+import { ChevronRight, Trash2, Loader2 } from 'lucide-react'
 
-export default function CalendarView({ logs }) {
+export default function CalendarView({ logs, onDeleteLog = null, deletingLogId = null }) {
     const [currentDate, setCurrentDate] = useState(new Date());
 
     // Takvim verileri
@@ -118,19 +118,50 @@ export default function CalendarView({ logs }) {
             <h3>{selectedDay} {monthNames[month]} Detayları</h3>
             {selectedLog.length > 0 ? (
                 <div className="card" style={{ display: 'block', padding: '0', overflow: 'hidden' }}>
-                    {selectedLog.map((log, i) => (
-                        <div key={i} style={{
-                            padding: '16px',
-                            borderBottom: i !== selectedLog.length - 1 ? '1px solid #f1f5f9' : 'none',
-                            display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-                        }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--primary-color)' }}></div>
-                                <span style={{ fontWeight: '500' }}>{log.title}</span>
+                    {selectedLog.map((log, i) => {
+                        const isDeleting = Boolean(log.id && deletingLogId === log.id)
+                        return (
+                            <div key={log.id || i} style={{
+                                padding: '16px',
+                                borderBottom: i !== selectedLog.length - 1 ? '1px solid #f1f5f9' : 'none',
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
+                                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--primary-color)', flexShrink: 0 }}></div>
+                                    <span style={{ fontWeight: '500', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{log.title}</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+                                    <span style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>+{log.amount} sayfa</span>
+                                    {onDeleteLog && (
+                                        <button
+                                            type="button"
+                                            disabled={isDeleting}
+                                            onClick={() => onDeleteLog(log)}
+                                            aria-label={`${log.title} okuma kaydını sil`}
+                                            title="Okumayı Sil"
+                                            style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '4px',
+                                                padding: '6px 10px',
+                                                borderRadius: '8px',
+                                                backgroundColor: '#fef2f2',
+                                                color: '#ef4444',
+                                                fontSize: '12px',
+                                                fontWeight: '600',
+                                                opacity: isDeleting ? 0.5 : 1,
+                                                cursor: isDeleting ? 'not-allowed' : 'pointer',
+                                                transition: 'opacity 0.2s'
+                                            }}
+                                        >
+                                            {isDeleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                                            <span>{isDeleting ? 'Siliniyor...' : 'Sil'}</span>
+                                        </button>
+                                    )}
+                                </div>
                             </div>
-                            <span style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>+{log.amount} sayfa</span>
-                        </div>
-                    ))}
+                        )
+                    })}
                     <div style={{ padding: '12px', background: '#f8fafc', fontSize: '13px', color: '#64748b', textAlign: 'center', borderTop: '1px solid #e2e8f0' }}>
                         Toplam: {totalPagesForSelectedDay} sayfa
                     </div>
