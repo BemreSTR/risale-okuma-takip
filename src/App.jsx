@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import './index.css'
 import { auth, db } from './firebase'
 import {
@@ -39,12 +39,12 @@ import {
 } from './utils/notifications'
 
 // Pages
-import AuthView from './pages/AuthView'
 import HomeView from './pages/HomeView'
-import CalendarView from './pages/CalendarView'
-import FriendsView from './pages/FriendsView'
-import ProfileView from './pages/ProfileView'
-import HatimlerView from './pages/HatimlerView'
+const AuthView = lazy(() => import('./pages/AuthView'))
+const CalendarView = lazy(() => import('./pages/CalendarView'))
+const FriendsView = lazy(() => import('./pages/FriendsView'))
+const ProfileView = lazy(() => import('./pages/ProfileView'))
+const HatimlerView = lazy(() => import('./pages/HatimlerView'))
 
 // Components
 import NavBar from './components/NavBar'
@@ -53,6 +53,29 @@ import AddBookModal from './components/modals/AddBookModal'
 import EditNameModal from './components/modals/EditNameModal'
 import PasswordResetModal from './components/modals/PasswordResetModal'
 import HatimEditModal from './components/modals/HatimEditModal'
+
+const LoadingScreen = ({ fullHeight = true }) => (
+  <div style={{
+    height: fullHeight ? '100vh' : '50vh',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: fullHeight ? 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)' : 'transparent',
+    gap: '16px'
+  }}>
+    <div style={{
+      width: '48px',
+      height: '48px',
+      border: '4px solid #e2e8f0',
+      borderTop: '4px solid #0d9488',
+      borderRadius: '50%',
+      animation: 'spin 1s linear infinite'
+    }} />
+    <p style={{ color: '#64748b', fontSize: '14px', fontWeight: 500 }}>Yükleniyor...</p>
+    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+  </div>
+)
 
 export default function App() {
   // Auth State
@@ -512,32 +535,15 @@ export default function App() {
   }
 
   if (loadingAuth) {
-    return (
-      <div style={{
-        height: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
-        gap: '16px'
-      }}>
-        <div style={{
-          width: '48px',
-          height: '48px',
-          border: '4px solid #e2e8f0',
-          borderTop: '4px solid #0d9488',
-          borderRadius: '50%',
-          animation: 'spin 1s linear infinite'
-        }} />
-        <p style={{ color: '#64748b', fontSize: '14px', fontWeight: 500 }}>Yükleniyor...</p>
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </div>
-    )
+    return <LoadingScreen />
   }
 
   if (!currentUser) {
-    return <AuthView />
+    return (
+      <Suspense fallback={<LoadingScreen />}>
+        <AuthView />
+      </Suspense>
+    )
   }
 
   const existingDayAmount =
@@ -564,41 +570,45 @@ export default function App() {
             removingBookId={removingBookId}
           />
         )}
-        {activeTab === 'calendar' && (
-          <CalendarView
-            logs={logs}
-            onDeleteLog={handleDeleteLog}
-            deletingLogId={deletingLogId}
-          />
-        )}
-        {activeTab === 'friends' && <FriendsView userId={currentUser.uid} />}
-        {activeTab === 'profile' && (
-          showHatimler ? (
-            <HatimlerView
-              finishedStats={finishedStats}
-              onBack={() => setShowHatimler(false)}
-              onEdit={async (book) => {
-                setSelectedHatimBook(book)
-                setHatimCountInput(String(finishedStats[book] || 0))
-                setEditHatimModal(true)
-              }}
-            />
-          ) : (
-            <ProfileView
-              finishedStats={finishedStats}
-              onShowHatimler={() => setShowHatimler(true)}
-              publicId={userProfile?.public_id || '...'}
-              name={userProfile?.name || currentUser.displayName || 'Misafir'}
-              onLogout={handleLogout}
-              requestNotifPermission={requestNotifPermission}
-              onTestNotification={handleTestNotification}
-              notifPermission={notifPermission}
-              onEditName={() => {
-                setNewNameInput(userProfile?.name || currentUser.displayName || '')
-                setEditNameModal(true)
-              }}
-            />
-          )
+        {activeTab !== 'home' && (
+          <Suspense fallback={<LoadingScreen fullHeight={false} />}>
+            {activeTab === 'calendar' && (
+              <CalendarView
+                logs={logs}
+                onDeleteLog={handleDeleteLog}
+                deletingLogId={deletingLogId}
+              />
+            )}
+            {activeTab === 'friends' && <FriendsView userId={currentUser.uid} />}
+            {activeTab === 'profile' && (
+              showHatimler ? (
+                <HatimlerView
+                  finishedStats={finishedStats}
+                  onBack={() => setShowHatimler(false)}
+                  onEdit={async (book) => {
+                    setSelectedHatimBook(book)
+                    setHatimCountInput(String(finishedStats[book] || 0))
+                    setEditHatimModal(true)
+                  }}
+                />
+              ) : (
+                <ProfileView
+                  finishedStats={finishedStats}
+                  onShowHatimler={() => setShowHatimler(true)}
+                  publicId={userProfile?.public_id || '...'}
+                  name={userProfile?.name || currentUser.displayName || 'Misafir'}
+                  onLogout={handleLogout}
+                  requestNotifPermission={requestNotifPermission}
+                  onTestNotification={handleTestNotification}
+                  notifPermission={notifPermission}
+                  onEditName={() => {
+                    setNewNameInput(userProfile?.name || currentUser.displayName || '')
+                    setEditNameModal(true)
+                  }}
+                />
+              )
+            )}
+          </Suspense>
         )}
       </div>
 

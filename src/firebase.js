@@ -1,6 +1,16 @@
 import { initializeApp } from 'firebase/app'
-import { getAuth } from 'firebase/auth'
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
+import {
+  initializeAuth,
+  indexedDBLocalPersistence,
+  browserLocalPersistence,
+  browserSessionPersistence
+} from 'firebase/auth'
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  persistentSingleTabManager
+} from 'firebase/firestore'
 
 const env = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : {}
 
@@ -14,12 +24,36 @@ const firebaseConfig = {
   measurementId: env.VITE_FIREBASE_MEASUREMENT_ID || 'G-R1KSKPCP9K'
 }
 
+/**
+ * Detects whether the app is running inside an installed standalone PWA shell.
+ */
+export const isStandalonePwa = () =>
+  typeof window !== 'undefined' &&
+  Boolean(
+    window.matchMedia?.('(display-mode: standalone)').matches ||
+    window.navigator?.standalone === true
+  )
+
 export const app = initializeApp(firebaseConfig)
-export const auth = getAuth(app)
+
+// Initialize Auth without popupRedirectResolver: the app only uses email/password,
+// and omitting the resolver prevents Firebase Auth from blocking mobile/Safari startup
+// on gapi + cross-origin auth iframe pings.
+export const auth = initializeAuth(app, {
+  persistence: [
+    indexedDBLocalPersistence,
+    browserLocalPersistence,
+    browserSessionPersistence
+  ]
+})
+
+// Standalone PWAs run in a single window; forceOwnership avoids stale IndexedDB
+// multi-tab lease delays when the OS kills the app without firing pagehide.
+const tabManager = isStandalonePwa()
+  ? persistentSingleTabManager({ forceOwnership: true })
+  : persistentMultipleTabManager()
 
 // Firestore with offline persistence for PWA support
 export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager()
-  })
+  localCache: persistentLocalCache({ tabManager })
 })
